@@ -1,0 +1,55 @@
+END-USER LICENSE AGREEMENT (EULA)
+HumHouse Vocal Tune Plugin
+Copyright (c) 2024-2026 HumHouse. All Rights Reserved.
+
+IMPORTANT: READ THIS AGREEMENT CAREFULLY BEFORE INSTALLING OR USING
+THE SOFTWARE.
+
+By installing or using HumHouse Vocal Tune (the "Software"), you agree
+to be bound by the terms of this End-User License Agreement ("EULA").
+If you do not agree to the terms of this EULA, do not install or use
+the Software.
+
+1. GRANT OF LICENSE
+HumHouse grants you a non-exclusive, non-transferable, limited license
+to install and use the Software on any number of computers that you
+own or control, for your personal or commercial music production use.
+
+2. OWNERSHIP
+The Software is owned by HumHouse and is protected by copyright laws
+and international treaty provisions. You acknowledge that no title to
+the intellectual property in the Software is transferred to you.
+
+3. RESTRICTIONS
+You may not:
+  a) Reverse-engineer, decompile, or disassemble the Software.
+  b) Redistribute, sublicense, rent, or lease the Software.
+  c) Remove any proprietary notices, labels, or marks from the Software.
+  d) Use the Software to create a competing product.
+
+4. NO WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+5. LIMITATION OF LIABILITY
+IN NO EVENT SHALL HUMHOUSE BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR IN
+CONNECTION WITH THE USE OF THE SOFTWARE.
+
+6. TERMINATION
+This license is effective until terminated. It will terminate
+automatically without notice if you fail to comply with any term of
+this EULA. Upon termination, you must destroy all copies of the
+Software.
+
+7. GOVERNING LAW
+This EULA shall be governed by the laws of the United States of
+America.
+
+8. ENTIRE AGREEMENT
+This EULA constitutes the entire agreement between you and HumHouse
+regarding the Software and supersedes all prior agreements.
+
+By clicking "I Agree" or by installing the Software, you acknowledge
+that you have read this EULA and agree to be bound by its terms.
