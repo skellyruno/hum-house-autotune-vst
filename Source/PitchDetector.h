@@ -1,115 +1,155 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace humtune
 {
 
-// High-quality YIN pitch detector with CMND (Cumulative Mean Normalized
-// Difference).  Operates on a ring buffer so detection runs every hop
-// without copying.  Designed for real-time vocal tracking at 44.1–96 kHz.
+// YIN pitch detector (CMND = Cumulative Mean Normalized Difference).
+//
+// Fixes compared with the first version:
+//  * The analysis window now contains BOTH halves of each comparison. The old
+//    code compared recent samples with samples from the "future", which in a
+//    ring buffer is old, unrelated audio, so pitch was often wrong.
+//  * The window is copied into a flat array first. The old inner loop did four
+//    integer divisions (modulo) per sample, which made it far too slow for the
+//    audio thread.
+//  * Detection runs once per "hop" (about every 6 ms) instead of once per audio
+//    block, and silence is treated as unvoiced.
 class PitchDetector
 {
 public:
+    static constexpr float kMinHz = 80.0f;     // lowest pitch we track
+    static constexpr float kMaxHz = 1500.0f;   // highest pitch we track
+
     void prepare (double sampleRate, int /*blockSize*/)
     {
         sr = sampleRate;
 
-        // Analysis window = 2 × longest expected period.
-        // For A1 ≈ 55 Hz we need ~2 × (sr/55) samples.
-        windowSize = static_cast<int>(sr / 55.0) * 2;
-        halfWindow = windowSize / 2;
+        maxTau   = std::max(16, static_cast<int>(std::ceil(sr / kMinHz)));
+        minTau   = std::max(2,  static_cast<int>(std::floor(sr / kMaxHz)));
+        integLen = maxTau;                       // samples compared per lag
+        bufLen   = integLen + maxTau + 2;        // samples needed in total
+        hopSize  = std::max(32, static_cast<int>(sr / 150.0));
 
-        // Ring buffer: 4× window for safe wrap-around reads
-        ringSize = windowSize * 4;
-        ring.assign(static_cast<size_t>(ringSize), 0.0f);
+        ring.assign(static_cast<size_t>(bufLen), 0.0f);
+        lin.assign(static_cast<size_t>(bufLen), 0.0f);
+        diffBuf.assign(static_cast<size_t>(maxTau + 2), 0.0f);
+        cmndBuf.assign(static_cast<size_t>(maxTau + 2), 0.0f);
+
         writePos = 0;
-
-        // YIN buffers
-        diffBuf.resize(static_cast<size_t>(halfWindow), 0.0f);
-        cmndBuf.resize(static_cast<size_t>(halfWindow), 0.0f);
-
-        // Median filter history for stability
-        medianHistory.fill(0.0f);
-        medianIdx = 0;
+        samplesSinceDetect = 0;
+        haveResult = false;
+        resetMedian();
 
         detectedHz = 0.0f;
         confidence = 0.0f;
     }
 
-    // Feed samples into the ring buffer.  Call detectPitch() after feeding
-    // at least one block.
+    // Feed samples into the ring buffer.
     void feedSamples (const float* data, int numSamples)
     {
+        if (ring.empty())
+            return;
+
         for (int i = 0; i < numSamples; ++i)
         {
             ring[static_cast<size_t>(writePos)] = data[i];
-            writePos = (writePos + 1) % ringSize;
+            if (++writePos >= bufLen)
+                writePos = 0;
         }
+
+        samplesSinceDetect = std::min(samplesSinceDetect + numSamples, 1 << 24);
     }
 
-    // Run YIN detection on the most recent windowSize samples.
-    // Returns detected fundamental in Hz (0 if unvoiced).
+    // Returns the detected fundamental in Hz (0 if unvoiced). Between hops it
+    // simply returns the previous result, which keeps the CPU cost low.
     float detectPitch()
     {
-        if (halfWindow < 4)
+        if (ring.empty())
             return 0.0f;
 
-        // Step 1 — Difference function
-        for (int tau = 0; tau < halfWindow; ++tau)
+        if (haveResult && samplesSinceDetect < hopSize)
+            return detectedHz;
+
+        samplesSinceDetect = 0;
+        haveResult = true;
+
+        // Copy the ring into a flat array, oldest sample first
+        const int tail = bufLen - writePos;
+        std::memcpy(lin.data(), ring.data() + writePos, static_cast<size_t>(tail) * sizeof(float));
+        if (writePos > 0)
+            std::memcpy(lin.data() + tail, ring.data(), static_cast<size_t>(writePos) * sizeof(float));
+
+        // Silence gate (about -70 dB): nothing to detect
         {
-            float sum = 0.0f;
-            for (int j = 0; j < halfWindow; ++j)
-            {
-                int idx0 = wrap(writePos - halfWindow + j);
-                int idx1 = wrap(idx0 + tau);
-                float d  = ring[static_cast<size_t>(idx0)]
-                         - ring[static_cast<size_t>(idx1)];
-                sum += d * d;
-            }
-            diffBuf[static_cast<size_t>(tau)] = sum;
+            float energy = 0.0f;
+            for (int j = 0; j < integLen; ++j)
+                energy += lin[static_cast<size_t>(j)] * lin[static_cast<size_t>(j)];
+            if (energy < static_cast<float>(integLen) * 1.0e-7f)
+                return setUnvoiced();
         }
 
-        // Step 2 — Cumulative Mean Normalized Difference (CMND)
+        // Step 1: difference function
+        const float* a = lin.data();
+        for (int tau = 1; tau <= maxTau; ++tau)
+        {
+            const float* b = a + tau;
+            float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+            int j = 0;
+            for (; j + 4 <= integLen; j += 4)
+            {
+                const float d0 = a[j]     - b[j];
+                const float d1 = a[j + 1] - b[j + 1];
+                const float d2 = a[j + 2] - b[j + 2];
+                const float d3 = a[j + 3] - b[j + 3];
+                s0 += d0 * d0;  s1 += d1 * d1;  s2 += d2 * d2;  s3 += d3 * d3;
+            }
+            for (; j < integLen; ++j)
+            {
+                const float d = a[j] - b[j];
+                s0 += d * d;
+            }
+            diffBuf[static_cast<size_t>(tau)] = (s0 + s1) + (s2 + s3);
+        }
+
+        // Step 2: cumulative mean normalized difference
         cmndBuf[0] = 1.0f;
         float runningSum = 0.0f;
-        for (int tau = 1; tau < halfWindow; ++tau)
+        for (int tau = 1; tau <= maxTau; ++tau)
         {
             runningSum += diffBuf[static_cast<size_t>(tau)];
             cmndBuf[static_cast<size_t>(tau)] =
-                diffBuf[static_cast<size_t>(tau)]
-                * static_cast<float>(tau)
-                / std::max(runningSum, 1e-12f);
+                diffBuf[static_cast<size_t>(tau)] * static_cast<float>(tau)
+                / std::max(runningSum, 1.0e-12f);
         }
 
-        // Step 3 — Absolute threshold search
+        // Step 3: absolute threshold search
+        const int lastTau = maxTau - 1;      // keep tau+1 in range
         int tauEst = -1;
-        int minTau = std::max(2, static_cast<int>(sr / 1500.0));  // cap at ~1500 Hz
-        int maxTau = std::min(halfWindow - 1,
-                              static_cast<int>(sr / 55.0));       // floor at ~55 Hz
 
-        for (int tau = minTau; tau <= maxTau; ++tau)
+        for (int tau = minTau; tau <= lastTau; ++tau)
         {
             if (cmndBuf[static_cast<size_t>(tau)] < yinThreshold)
             {
-                // Walk to the local minimum
-                while (tau + 1 <= maxTau
-                    && cmndBuf[static_cast<size_t>(tau + 1)]
-                     < cmndBuf[static_cast<size_t>(tau)])
+                while (tau + 1 <= lastTau
+                    && cmndBuf[static_cast<size_t>(tau + 1)] < cmndBuf[static_cast<size_t>(tau)])
                     ++tau;
                 tauEst = tau;
                 break;
             }
         }
 
-        // If no dip found, pick the global minimum
+        // No dip below the threshold: take the global minimum if it is decent
         if (tauEst < 0)
         {
             float best = 999.0f;
-            for (int tau = minTau; tau <= maxTau; ++tau)
+            for (int tau = minTau; tau <= lastTau; ++tau)
             {
                 if (cmndBuf[static_cast<size_t>(tau)] < best)
                 {
@@ -118,38 +158,33 @@ public:
                 }
             }
             if (best > 0.5f)
-            {
-                detectedHz = 0.0f;
-                confidence = 0.0f;
-                return 0.0f;   // Unvoiced
-            }
+                return setUnvoiced();
         }
 
         if (tauEst < 1)
-        {
-            detectedHz = 0.0f;
-            confidence = 0.0f;
-            return 0.0f;
-        }
+            return setUnvoiced();
 
-        // Step 4 — Parabolic interpolation for sub-sample accuracy
+        // Step 4: parabolic interpolation for sub-sample accuracy
         float betterTau = static_cast<float>(tauEst);
-        if (tauEst > 0 && tauEst < halfWindow - 1)
+        if (tauEst > 1 && tauEst < maxTau)
         {
-            float s0 = cmndBuf[static_cast<size_t>(tauEst - 1)];
-            float s1 = cmndBuf[static_cast<size_t>(tauEst)];
-            float s2 = cmndBuf[static_cast<size_t>(tauEst + 1)];
-            float denom = 2.0f * (2.0f * s1 - s2 - s0);
-            if (std::abs(denom) > 1e-9f)
-                betterTau += (s0 - s2) / denom;
+            // Interpolate on the raw difference curve: it is much closer to a
+            // parabola near its minimum than the normalized (CMND) curve.
+            const float s0 = diffBuf[static_cast<size_t>(tauEst - 1)];
+            const float s1 = diffBuf[static_cast<size_t>(tauEst)];
+            const float s2 = diffBuf[static_cast<size_t>(tauEst + 1)];
+            const float denom = 2.0f * (s0 - 2.0f * s1 + s2);   // vertex of the parabola through the 3 points
+            if (std::abs(denom) > 1.0e-9f)
+                betterTau += juce::jlimit(-1.0f, 1.0f, (s0 - s2) / denom);
         }
 
-        float rawHz = static_cast<float>(sr) / betterTau;
-        confidence = 1.0f - cmndBuf[static_cast<size_t>(tauEst)];
+        const float rawHz = static_cast<float>(sr) / betterTau;
+        confidence = juce::jlimit(0.0f, 1.0f, 1.0f - cmndBuf[static_cast<size_t>(tauEst)]);
 
-        // Step 5 — Median filter (5-point) for stability
+        // Step 5: median filter for stability
         medianHistory[static_cast<size_t>(medianIdx)] = rawHz;
         medianIdx = (medianIdx + 1) % kMedianSize;
+        medianCount = std::min(medianCount + 1, kMedianSize);
 
         detectedHz = medianFiltered();
         return detectedHz;
@@ -163,27 +198,44 @@ public:
 private:
     static constexpr int kMedianSize = 5;
 
-    int wrap (int idx) const
+    float setUnvoiced()
     {
-        return ((idx % ringSize) + ringSize) % ringSize;
+        detectedHz = 0.0f;
+        confidence = 0.0f;
+        resetMedian();
+        return 0.0f;
+    }
+
+    void resetMedian()
+    {
+        medianHistory.fill(0.0f);
+        medianIdx = 0;
+        medianCount = 0;
     }
 
     float medianFiltered() const
     {
-        std::array<float, kMedianSize> tmp = medianHistory;
-        std::sort(tmp.begin(), tmp.end());
-        return tmp[kMedianSize / 2];
+        const int count = std::min(medianCount, kMedianSize);
+        float tmp[kMedianSize];
+        for (int i = 0; i < count; ++i)
+            tmp[i] = medianHistory[static_cast<size_t>(i)];
+        for (int i = 1; i < count; ++i)            // tiny insertion sort
+        {
+            const float v = tmp[i];
+            int k = i - 1;
+            while (k >= 0 && tmp[k] > v) { tmp[k + 1] = tmp[k]; --k; }
+            tmp[k + 1] = v;
+        }
+        return count > 0 ? tmp[count / 2] : 0.0f;
     }
 
     double sr = 44100.0;
-    int windowSize = 0;
-    int halfWindow = 0;
-    int ringSize = 0;
+    int maxTau = 0, minTau = 0, integLen = 0, bufLen = 0, hopSize = 256;
     int writePos = 0;
+    int samplesSinceDetect = 0;
+    bool haveResult = false;
 
-    std::vector<float> ring;
-    std::vector<float> diffBuf;
-    std::vector<float> cmndBuf;
+    std::vector<float> ring, lin, diffBuf, cmndBuf;
 
     float yinThreshold = 0.15f;
     float detectedHz = 0.0f;
@@ -191,6 +243,7 @@ private:
 
     std::array<float, kMedianSize> medianHistory {};
     int medianIdx = 0;
+    int medianCount = 0;
 };
 
 } // namespace humtune
