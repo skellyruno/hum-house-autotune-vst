@@ -61,6 +61,8 @@ private:
     juce::AudioProcessorValueTreeState apvts;
     humtune::AutoTuneEngine engine;
 
+    juce::AudioBuffer<float> dryScratch;   // dry copy used for the dry/wet mix
+
     std::atomic<float> inputLevel  { 0.0f };
     std::atomic<float> outputLevel { 0.0f };
 
