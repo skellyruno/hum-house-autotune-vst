@@ -118,6 +118,9 @@ void HumHouseVocalTuneProcessor::prepareToPlay (double sampleRate, int samplesPe
 {
     engine.prepare(sampleRate, samplesPerBlock);
     setLatencySamples(engine.getLatencySamples());
+
+    // Scratch buffer for the dry signal (allocated here, not on the audio thread)
+    dryScratch.setSize(juce::jmax(2, getTotalNumInputChannels()), juce::jmax(1, samplesPerBlock));
 }
 
 void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
@@ -181,12 +184,12 @@ void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         inputLevel.store(peak);
     }
 
-    // Keep dry copy for mix
-    juce::AudioBuffer<float> dryBuffer;
-    if (mix < 0.999f)
-    {
-        dryBuffer.makeCopyOf(buffer);
-    }
+    // Keep a dry copy for the mix. The wet path is delayed by the engine's latency,
+    // so the dry copy has to be delayed by exactly the same amount to line up.
+    // (It is done every block so the delay line never holds stale audio.)
+    auto& dryBuffer = dryScratch;
+    dryBuffer.makeCopyOf(buffer, true);
+    engine.delayDry(dryBuffer);
 
     // Process autotune
     engine.process(buffer);
