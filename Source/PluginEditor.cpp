@@ -87,6 +87,8 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
         btn.setButtonText(kNoteNames[i]);
         btn.setClickingTogglesState(true);
         btn.setToggleState(true, juce::dontSendNotification);
+        // Tell the look-and-feel to draw this as a piano key (1 = white, 2 = black)
+        btn.getProperties().set("pianoKey", isBlackKey(i) ? 2 : 1);
         addAndMakeVisible(btn);
 
         noteAtts[static_cast<size_t>(i)] =
@@ -154,80 +156,216 @@ void HumHouseVocalTuneEditor::timerCallback()
 // ---------------------------------------------------------------------------
 void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
 {
-    // Background gradient — deep dark purple
+    const float twoPi = juce::MathConstants<float>::twoPi;
+
+    // Background gradient
     juce::ColourGradient bgGrad(Palette::bgDark, 0.0f, 0.0f,
-                                 juce::Colour(0xff12121e), 0.0f, static_cast<float>(getHeight()),
+                                 Palette::bgDeep, 0.0f, static_cast<float>(getHeight()),
                                  false);
     g.setGradientFill(bgGrad);
     g.fillAll();
 
-    auto bounds = getLocalBounds();
+    // Outer frame
+    g.setColour(Palette::accentDim);
+    g.drawRect(getLocalBounds(), 2);
+    g.setColour(Palette::accent.withAlpha(0.35f));
+    g.drawRect(getLocalBounds().reduced(3), 1);
 
     // --- Title bar ---
-    auto topBar = bounds.removeFromTop(40);
+    auto topBar = juce::Rectangle<int>(0, 0, getWidth(), 44);
     g.setColour(Palette::bgPanel);
     g.fillRect(topBar);
+    g.setColour(Palette::accentDim);
+    g.drawLine(0.0f, 44.0f, static_cast<float>(getWidth()), 44.0f, 1.5f);
 
-    g.setColour(Palette::purpleBright);
-    g.setFont(juce::Font(juce::FontOptions(20.0f).withStyle("Bold")));
-    g.drawText("HumHouse Vocal Tune", topBar.reduced(12, 0), juce::Justification::centredLeft);
+    // Logo ring
+    {
+        auto logo = juce::Rectangle<float>(12.0f, 6.0f, 32.0f, 32.0f);
+        g.setColour(Palette::accentGlow);
+        g.drawEllipse(logo.expanded(2.0f), 3.0f);
+        g.setColour(Palette::accentBright);
+        g.drawEllipse(logo, 1.5f);
+        g.setFont(juce::Font(juce::FontOptions(13.0f).withStyle("Bold")));
+        g.drawText("HH", logo.toNearestInt(), juce::Justification::centred, false);
+    }
+
+    // Title with glow
+    {
+        auto titleArea = topBar.withTrimmedLeft(60).withTrimmedRight(130);
+        const juce::String title = "HumHouse Vocal Tune";
+        g.setFont(juce::Font(juce::FontOptions(24.0f).withStyle("Bold")));
+
+        g.setColour(Palette::accent.withAlpha(0.12f));
+        for (int dx = -2; dx <= 2; ++dx)
+            for (int dy = -2; dy <= 2; ++dy)
+                if (dx != 0 || dy != 0)
+                    g.drawText(title, titleArea.translated(dx, dy), juce::Justification::centred, false);
+
+        g.setColour(Palette::accentBright);
+        g.drawText(title, titleArea, juce::Justification::centred, false);
+    }
 
     g.setColour(Palette::textDim);
-    g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText("v1.0.0", topBar.reduced(12, 0), juce::Justification::centredRight);
+    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+    g.drawText("v1.0.0", juce::Rectangle<int>(getWidth() - 190, 0, 70, 44),
+               juce::Justification::centredRight, false);
 
-    // --- Pitch Orb Visualizer (centre area) ---
-    auto orbArea = juce::Rectangle<int>(40, 55, 340, 260);
+    // --- Main panel + side panels ---
+    auto mainPanel = juce::Rectangle<float>(8.0f, 52.0f, 764.0f, 310.0f);
+    g.setColour(Palette::bgPanel.withAlpha(0.9f));
+    g.fillRoundedRectangle(mainPanel, 8.0f);
+    g.setColour(Palette::accentDim);
+    g.drawRoundedRectangle(mainPanel, 8.0f, 1.5f);
 
-    // Outer glow circle
+    // Left knob column
+    g.setColour(Palette::bgSection.withAlpha(0.8f));
+    g.fillRoundedRectangle(11.0f, 56.0f, 66.0f, 298.0f, 6.0f);
+    g.setColour(Palette::accentDeep);
+    g.drawRoundedRectangle(11.0f, 56.0f, 66.0f, 298.0f, 6.0f, 1.0f);
+
+    // Right knob panel
+    g.setColour(Palette::bgSection.withAlpha(0.6f));
+    g.fillRoundedRectangle(488.0f, 56.0f, 280.0f, 298.0f, 10.0f);
+    g.setColour(Palette::accentDeep);
+    g.drawRoundedRectangle(488.0f, 56.0f, 280.0f, 298.0f, 10.0f, 1.0f);
+
+    // Corner brackets on the main panel
     {
-        float cx = static_cast<float>(orbArea.getCentreX());
-        float cy = static_cast<float>(orbArea.getCentreY());
-        float r  = 110.0f;
+        g.setColour(Palette::accentBright);
+        const float L = 14.0f;
+        const float x0 = 8.0f, y0 = 52.0f, x1 = 772.0f, y1 = 362.0f;
+        g.drawLine(x0, y0 + L, x0, y0, 2.0f);   g.drawLine(x0, y0, x0 + L, y0, 2.0f);
+        g.drawLine(x1 - L, y0, x1, y0, 2.0f);   g.drawLine(x1, y0, x1, y0 + L, 2.0f);
+        g.drawLine(x0, y1 - L, x0, y1, 2.0f);   g.drawLine(x0, y1, x0 + L, y1, 2.0f);
+        g.drawLine(x1 - L, y1, x1, y1, 2.0f);   g.drawLine(x1, y1 - L, x1, y1, 2.0f);
+    }
+
+    // --- Radar-style pitch visualizer ---
+    {
+        const float cx = 282.0f;
+        const float cy = 206.0f;
+        const float R  = 128.0f;
+
+        // Soft glow behind everything
+        juce::ColourGradient glow(Palette::accent.withAlpha(0.18f), cx, cy,
+                                   Palette::accent.withAlpha(0.0f),  cx, cy - R - 14.0f, true);
+        g.setGradientFill(glow);
+        g.fillEllipse(cx - R - 14.0f, cy - R - 14.0f, (R + 14.0f) * 2.0f, (R + 14.0f) * 2.0f);
 
         // Outer ring
-        g.setColour(Palette::purpleGlow);
-        g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 2.0f);
-        g.drawEllipse(cx - r - 10.0f, cy - r - 10.0f,
-                       (r + 10.0f) * 2.0f, (r + 10.0f) * 2.0f, 1.0f);
+        g.setColour(Palette::accentDim);
+        g.drawEllipse(cx - R, cy - R, R * 2.0f, R * 2.0f, 2.0f);
 
-        // Inner filled orb with gradient
-        juce::ColourGradient orbGrad(
-            Palette::purpleBright.withAlpha(0.6f), cx - 30.0f, cy - 30.0f,
-            Palette::bgDark.withAlpha(0.9f), cx + 60.0f, cy + 60.0f, true);
-        g.setGradientFill(orbGrad);
-        g.fillEllipse(cx - r * 0.65f, cy - r * 0.65f,
-                       r * 1.3f, r * 1.3f);
+        // Tick ring
+        for (int i = 0; i < 90; ++i)
+        {
+            const float a = static_cast<float>(i) / 90.0f * twoPi;
+            const bool major = (i % 5 == 0);
+            const float r1 = R - 8.0f;
+            const float r2 = R - (major ? 19.0f : 14.0f);
+            g.setColour(major ? Palette::accent.withAlpha(0.8f) : Palette::accentDim.withAlpha(0.7f));
+            g.drawLine(cx + r1 * std::sin(a), cy - r1 * std::cos(a),
+                       cx + r2 * std::sin(a), cy - r2 * std::cos(a),
+                       major ? 1.6f : 1.0f);
+        }
 
-        // Correction indicator — line from center showing direction
+        // Inner rings
+        g.setColour(Palette::accentDeep);
+        g.drawEllipse(cx - (R - 30.0f), cy - (R - 30.0f), (R - 30.0f) * 2.0f, (R - 30.0f) * 2.0f, 1.0f);
+        g.drawEllipse(cx - (R - 62.0f), cy - (R - 62.0f), (R - 62.0f) * 2.0f, (R - 62.0f) * 2.0f, 1.0f);
+        g.drawEllipse(cx - (R - 94.0f), cy - (R - 94.0f), (R - 94.0f) * 2.0f, (R - 94.0f) * 2.0f, 1.0f);
+
+        // Crosshair
+        g.setColour(Palette::accent.withAlpha(0.55f));
+        g.drawLine(cx - R - 8.0f, cy, cx + R + 8.0f, cy, 1.0f);
+        g.drawLine(cx, cy - R - 8.0f, cx, cy + R + 8.0f, 1.0f);
+
+        // Top / bottom markers
+        {
+            juce::Path tri;
+            tri.addTriangle(cx - 7.0f, cy - R - 14.0f, cx + 7.0f, cy - R - 14.0f, cx, cy - R - 3.0f);
+            tri.addTriangle(cx - 7.0f, cy + R + 14.0f, cx + 7.0f, cy + R + 14.0f, cx, cy + R + 3.0f);
+            g.setColour(Palette::accentBright);
+            g.fillPath(tri);
+        }
+
+        // Radar sweep line
+        {
+            const float sweep = static_cast<float>(juce::Time::getMillisecondCounter() % 4000u)
+                                / 4000.0f * twoPi;
+            g.setColour(Palette::accent.withAlpha(0.22f));
+            g.drawLine(cx, cy, cx + (R - 6.0f) * std::sin(sweep), cy - (R - 6.0f) * std::cos(sweep), 1.5f);
+        }
+
+        // Confidence arc (grows from the top, both directions)
+        if (displayConfidence > 0.01f)
+        {
+            const float half = juce::jlimit(0.0f, 1.0f, displayConfidence) * juce::MathConstants<float>::pi;
+            juce::Path conf;
+            conf.addCentredArc(cx, cy, R - 2.0f, R - 2.0f, 0.0f, -half, half, true);
+            g.setColour(Palette::accent.withAlpha(0.22f));
+            g.strokePath(conf, juce::PathStrokeType(11.0f));
+            g.setColour(Palette::accentBright);
+            g.strokePath(conf, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved,
+                                                     juce::PathStrokeType::rounded));
+        }
+
+        // Inner orb
+        {
+            const float ro = R - 62.0f;
+            juce::ColourGradient orbGrad(Palette::accent.withAlpha(0.30f), cx, cy,
+                                          Palette::bgDark.withAlpha(0.9f), cx, cy - ro, true);
+            g.setGradientFill(orbGrad);
+            g.fillEllipse(cx - ro, cy - ro, ro * 2.0f, ro * 2.0f);
+        }
+
+        // Correction needle
         if (displayDetectedHz > 60.0f && displayConfidence > 0.3f)
         {
-            float normCorrection = juce::jlimit(-1.0f, 1.0f,
-                                                  displayCorrectionCents / 100.0f);
+            float normCorrection = juce::jlimit(-1.0f, 1.0f, displayCorrectionCents / 100.0f);
             float angle = normCorrection * juce::MathConstants<float>::halfPi;
-            float indicatorLen = r * 0.5f * displayConfidence;
+            float indicatorLen = (R - 62.0f) * 0.9f * displayConfidence;
             float ix = cx + indicatorLen * std::sin(angle);
             float iy = cy - indicatorLen * std::cos(angle);
 
-            g.setColour(Palette::purpleBright);
+            g.setColour(Palette::accent.withAlpha(0.3f));
+            g.drawLine(cx, cy, ix, iy, 8.0f);
+            g.setColour(Palette::accentBright);
             g.drawLine(cx, cy, ix, iy, 3.0f);
             g.fillEllipse(ix - 5.0f, iy - 5.0f, 10.0f, 10.0f);
         }
 
-        // Detected note text in orb
-        g.setColour(Palette::textBright);
-        g.setFont(juce::Font(juce::FontOptions(38.0f).withStyle("Bold")));
-        juce::String noteText = HumHouseVocalTuneProcessor::midiNoteToName(displayDetectedMidi);
-        if (noteText.isEmpty()) noteText = "--";
-        g.drawText(noteText,
-                   static_cast<int>(cx - 50.0f), static_cast<int>(cy - 25.0f),
-                   100, 50, juce::Justification::centred);
+        // Detected note (with glow)
+        {
+            juce::String noteText = HumHouseVocalTuneProcessor::midiNoteToName(displayDetectedMidi);
+            if (noteText.isEmpty()) noteText = "--";
+
+            auto noteRect = juce::Rectangle<int>(static_cast<int>(cx - 60.0f),
+                                                  static_cast<int>(cy - 30.0f), 120, 60);
+            g.setFont(juce::Font(juce::FontOptions(46.0f).withStyle("Bold")));
+            g.setColour(Palette::accent.withAlpha(0.14f));
+            for (int dx = -2; dx <= 2; ++dx)
+                for (int dy = -2; dy <= 2; ++dy)
+                    if (dx != 0 || dy != 0)
+                        g.drawText(noteText, noteRect.translated(dx, dy), juce::Justification::centred, false);
+            g.setColour(Palette::textBright);
+            g.drawText(noteText, noteRect, juce::Justification::centred, false);
+
+            juce::String tgt = HumHouseVocalTuneProcessor::midiNoteToName(displayTargetMidi);
+            g.setColour(Palette::textDim);
+            g.setFont(juce::Font(juce::FontOptions(13.0f)));
+            g.drawText("Target: " + (tgt.isEmpty() ? "--" : tgt),
+                       static_cast<int>(cx - 60.0f), static_cast<int>(cy + 30.0f), 120, 18,
+                       juce::Justification::centred, false);
+        }
     }
 
-    // --- Heatmap (below orb) ---
-    auto heatArea = juce::Rectangle<int>(40, 325, 340, 40);
+    // --- Heatmap strip (above the piano) ---
+    auto heatArea = juce::Rectangle<int>(20, 404, 574, 34);
     g.setColour(Palette::bgSection);
     g.fillRoundedRectangle(heatArea.toFloat(), 4.0f);
+    g.setColour(Palette::accentDeep);
+    g.drawRoundedRectangle(heatArea.toFloat(), 4.0f, 1.0f);
 
     // Draw scrolling pitch lines
     for (int i = 0; i < kHeatmapWidth; ++i)
@@ -248,38 +386,44 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
             float norm = (std::log2(hz) - std::log2(60.0f))
                        / (std::log2(1500.0f) - std::log2(60.0f));
             norm = juce::jlimit(0.0f, 1.0f, norm);
-            return static_cast<float>(heatArea.getBottom())
-                 - norm * static_cast<float>(heatArea.getHeight());
+            return static_cast<float>(heatArea.getBottom()) - 2.0f
+                 - norm * static_cast<float>(heatArea.getHeight() - 4);
         };
 
         float yDet = hzToY(det);
         g.setColour(Palette::heatCold.withAlpha(0.7f));
-        g.fillRect(x, yDet, 2.0f, 2.0f);
+        g.fillRect(x, yDet, 3.0f, 2.0f);
 
         if (tgt > 60.0f)
         {
             float yTgt = hzToY(tgt);
             g.setColour(Palette::heatWarm.withAlpha(0.9f));
-            g.fillRect(x, yTgt, 2.0f, 2.0f);
+            g.fillRect(x, yTgt, 3.0f, 2.0f);
         }
     }
 
-    // Heatmap labels
     g.setColour(Palette::textDim);
     g.setFont(juce::Font(juce::FontOptions(10.0f)));
-    g.drawText("In/Out HeatMap", heatArea.getX(), heatArea.getY() - 14,
-               heatArea.getWidth(), 14, juce::Justification::centredRight);
+    g.drawText("In/Out HeatMap", heatArea.getX() + 6, heatArea.getY() + 2,
+               heatArea.getWidth() - 12, 12, juce::Justification::topRight, false);
 
-    // --- Input / Output level meters ---
-    auto meterArea = juce::Rectangle<int>(40, 375, 340, 20);
+    // --- Right-bottom panel: meters, readouts, reference ---
+    auto sidePanel = juce::Rectangle<float>(604.0f, 404.0f, 168.0f, 200.0f);
+    g.setColour(Palette::bgPanel);
+    g.fillRoundedRectangle(sidePanel, 8.0f);
+    g.setColour(Palette::accentDim);
+    g.drawRoundedRectangle(sidePanel, 8.0f, 1.2f);
+
+    // Input / Output level meters
+    auto meterArea = juce::Rectangle<int>(612, 412, 152, 30);
     g.setColour(Palette::textDim);
     g.setFont(juce::Font(juce::FontOptions(10.0f)));
-    g.drawText("Input",  meterArea.getX(), meterArea.getY(), 40, 10, juce::Justification::centredLeft);
-    g.drawText("Output", meterArea.getX(), meterArea.getY() + 10, 40, 10, juce::Justification::centredLeft);
+    g.drawText("Input",  meterArea.getX(), meterArea.getY(), 40, 12, juce::Justification::centredLeft, false);
+    g.drawText("Output", meterArea.getX(), meterArea.getY() + 14, 40, 12, juce::Justification::centredLeft, false);
 
     auto drawMeter = [&](float level, int y)
     {
-        int meterX = meterArea.getX() + 45;
+        int meterX = meterArea.getX() + 46;
         int meterW = meterArea.getWidth() - 50;
         float barW = juce::jlimit(0.0f, 1.0f, level) * static_cast<float>(meterW);
 
@@ -295,11 +439,10 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
                                 barW, 6.0f, 2.0f);
     };
 
-    drawMeter(displayInputLevel,  meterArea.getY() + 2);
-    drawMeter(displayOutputLevel, meterArea.getY() + 12);
+    drawMeter(displayInputLevel,  meterArea.getY() + 3);
+    drawMeter(displayOutputLevel, meterArea.getY() + 17);
 
-    // --- Detected / Target info ---
-    auto infoArea = juce::Rectangle<int>(400, 320, 360, 75);
+    // Detected / Target readouts
     g.setColour(Palette::textDim);
     g.setFont(juce::Font(juce::FontOptions(11.0f)));
 
@@ -308,27 +451,25 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
     juce::String corrStr = juce::String(displayCorrectionCents, 1) + " cents";
     juce::String confStr = juce::String(static_cast<int>(displayConfidence * 100.0f)) + "%";
 
+    const int infoX = 612;
+    const int infoW = 154;
     g.drawText("Detected: " + (detNote.isEmpty() ? "--" : detNote)
-               + "  (" + juce::String(displayDetectedHz, 1) + " Hz)",
-               infoArea.getX(), infoArea.getY(), infoArea.getWidth(), 18,
-               juce::Justification::centredLeft);
+               + "  " + juce::String(displayDetectedHz, 1) + " Hz",
+               infoX, 452, infoW, 16, juce::Justification::centredLeft, false);
     g.drawText("Target:   " + (tgtNote.isEmpty() ? "--" : tgtNote)
-               + "  (" + juce::String(displayTargetHz, 1) + " Hz)",
-               infoArea.getX(), infoArea.getY() + 18, infoArea.getWidth(), 18,
-               juce::Justification::centredLeft);
-    g.drawText("Correction: " + corrStr + "   Confidence: " + confStr,
-               infoArea.getX(), infoArea.getY() + 36, infoArea.getWidth(), 18,
-               juce::Justification::centredLeft);
+               + "  " + juce::String(displayTargetHz, 1) + " Hz",
+               infoX, 468, infoW, 16, juce::Justification::centredLeft, false);
+    g.drawText("Correction: " + corrStr,
+               infoX, 484, infoW, 16, juce::Justification::centredLeft, false);
+    g.drawText("Confidence: " + confStr,
+               infoX, 500, infoW, 16, juce::Justification::centredLeft, false);
 
     // --- Piano keyboard background ---
-    auto pianoArea = juce::Rectangle<int>(40, 500, 700, 90);
+    auto pianoArea = juce::Rectangle<float>(20.0f, 444.0f, 574.0f, 160.0f);
     g.setColour(Palette::bgPanel);
-    g.fillRoundedRectangle(pianoArea.toFloat(), 6.0f);
-
-    g.setColour(Palette::textDim);
-    g.setFont(juce::Font(juce::FontOptions(11.0f)));
-    g.drawText("Scale Notes", pianoArea.getX(), pianoArea.getY() - 16,
-               pianoArea.getWidth(), 16, juce::Justification::centredLeft);
+    g.fillRoundedRectangle(pianoArea, 6.0f);
+    g.setColour(Palette::accentDim);
+    g.drawRoundedRectangle(pianoArea, 6.0f, 1.2f);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,71 +477,55 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
 // ---------------------------------------------------------------------------
 void HumHouseVocalTuneEditor::resized()
 {
+    auto place = [](juce::Slider& k, juce::Label& l, int x, int y, int size)
+    {
+        k.setBounds(x, y, size, size);
+        l.setBounds(x - 6, y + size - 2, size + 12, 16);
+    };
+
+    // --- Left column of small knobs ---
+    const int smKnob = 58;
+    const int colX = 15;
+    place(humanizeKnob,   humanizeLabel,   colX,  60, smKnob);
+    place(mixKnob,        mixLabel,        colX, 132, smKnob);
+    place(inputGainKnob,  inputGainLabel,  colX, 204, smKnob);
+    place(outputGainKnob, outputGainLabel, colX, 276, smKnob);
+
     // --- Main knobs (right side) ---
-    int knobSize = 90;
-    int knobX = 440;
-    int knobY = 60;
-
-    speedKnob.setBounds(knobX, knobY, knobSize, knobSize);
-    speedLabel.setBounds(knobX, knobY + knobSize - 2, knobSize, 16);
-
-    sustainKnob.setBounds(knobX + 120, knobY, knobSize, knobSize);
-    sustainLabel.setBounds(knobX + 120, knobY + knobSize - 2, knobSize, 16);
-
-    amountKnob.setBounds(knobX + 60, knobY + 100, knobSize, knobSize);
-    amountLabel.setBounds(knobX + 60, knobY + 100 + knobSize - 2, knobSize, 16);
-
-    // Smaller knobs
-    int smKnobSize = 65;
-    int row2Y = 280;
-
-    humanizeKnob.setBounds(knobX + 180, row2Y, smKnobSize, smKnobSize);
-    humanizeLabel.setBounds(knobX + 180, row2Y + smKnobSize - 2, smKnobSize, 16);
-
-    mixKnob.setBounds(knobX + 260, row2Y, smKnobSize, smKnobSize);
-    mixLabel.setBounds(knobX + 260, row2Y + smKnobSize - 2, smKnobSize, 16);
-
-    inputGainKnob.setBounds(knobX + 180, row2Y - 90, smKnobSize, smKnobSize);
-    inputGainLabel.setBounds(knobX + 180, row2Y - 90 + smKnobSize - 2, smKnobSize, 16);
-
-    outputGainKnob.setBounds(knobX + 260, row2Y - 90, smKnobSize, smKnobSize);
-    outputGainLabel.setBounds(knobX + 260, row2Y - 90 + smKnobSize - 2, smKnobSize, 16);
-
-    referenceFreqKnob.setBounds(knobX + 220, row2Y + 80, smKnobSize, smKnobSize);
-    referenceFreqLabel.setBounds(knobX + 220, row2Y + 80 + smKnobSize - 2, smKnobSize, 16);
+    place(speedKnob,   speedLabel,   500,  62, 128);
+    place(sustainKnob, sustainLabel, 650,  70,  98);
+    place(amountKnob,  amountLabel,  566, 206, 128);
 
     // --- Scale mode buttons ---
-    int btnY = 408;
-    int btnW = 80;
-    int btnH = 26;
-    int btnX = 40;
-    majorBtn.setBounds(btnX, btnY, btnW, btnH);
-    minorBtn.setBounds(btnX + btnW + 6, btnY, btnW, btnH);
-    chromBtn.setBounds(btnX + (btnW + 6) * 2, btnY, btnW + 10, btnH);
+    const int rowY = 368;
+    const int rowH = 28;
+    majorBtn.setBounds(20,  rowY, 80, rowH);
+    minorBtn.setBounds(106, rowY, 80, rowH);
+    chromBtn.setBounds(192, rowY, 90, rowH);
 
     // --- Toggle buttons ---
-    int togX = btnX + (btnW + 6) * 3 + 20;
-    int togW = 105;
-    stabilizerBtn.setBounds(togX, btnY, togW, btnH);
-    formantBtn.setBounds(togX + togW + 6, btnY, 80, btnH);
-    lowLatBtn.setBounds(togX + togW + 86 + 6, btnY, 90, btnH);
-
-    // --- Enable / bypass ---
-    enableBtn.setBounds(getWidth() - 110, 8, 95, 24);
+    stabilizerBtn.setBounds(300, rowY, 130, rowH);
+    formantBtn.setBounds(436,    rowY,  90, rowH);
+    lowLatBtn.setBounds(532,     rowY, 120, rowH);
 
     // --- Root note ---
-    rootNoteBox.setBounds(40, 455, 70, 26);
-    rootNoteLabel.setBounds(115, 455, 40, 26);
+    rootNoteLabel.setBounds(660, rowY, 28, rowH);
+    rootNoteBox.setBounds(690,   rowY, 70, rowH);
+
+    // --- Enable / bypass ---
+    enableBtn.setBounds(getWidth() - 110, 8, 95, 28);
+
+    // --- Pitch reference knob (bottom right panel) ---
+    place(referenceFreqKnob, referenceFreqLabel, 656, 522, 62);
 
     // --- Piano note buttons ---
-    int pianoX = 40;
-    int pianoY = 510;
-    int whiteW = 54;
-    int whiteH = 72;
-    int blackW = 36;
-    int blackH = 45;
+    const int pianoX = 28;
+    const int pianoY = 452;
+    const int whiteW = 78;
+    const int whiteH = 144;
+    const int blackW = 48;
+    const int blackH = 88;
 
-    // Layout: 7 white keys + 5 black keys overlaid
     // C  D  E  F  G  A  B  (white)
     // C# D#    F# G# A#    (black)
     int whiteIdx[] = { 0, 2, 4, 5, 7, 9, 11 };
@@ -410,9 +535,6 @@ void HumHouseVocalTuneEditor::resized()
     {
         auto& btn = noteButtons[static_cast<size_t>(whiteIdx[i])];
         btn.setBounds(pianoX + i * (whiteW + 2), pianoY, whiteW, whiteH);
-        btn.setColour(juce::TextButton::buttonColourId,
-                       btn.getToggleState() ? Palette::keyWhite : Palette::keyDisabled);
-        btn.setColour(juce::TextButton::buttonOnColourId, Palette::keyActive);
     }
 
     // Black keys positioned between whites
@@ -422,9 +544,6 @@ void HumHouseVocalTuneEditor::resized()
         auto& btn = noteButtons[static_cast<size_t>(blackIdx[i])];
         int xOff = pianoX + blackPositions[i] * (whiteW + 2) + whiteW - blackW / 2 + 1;
         btn.setBounds(xOff, pianoY, blackW, blackH);
-        btn.setColour(juce::TextButton::buttonColourId,
-                       btn.getToggleState() ? Palette::keyBlack : Palette::keyDisabled);
-        btn.setColour(juce::TextButton::buttonOnColourId, Palette::keyActive);
         btn.toFront(false);
     }
 }
