@@ -31,17 +31,35 @@ public:
     {
         sr = sampleRate;
 
-        maxTau   = std::max(16, static_cast<int>(std::ceil(sr / kMinHz)));
-        minTau   = std::max(2,  static_cast<int>(std::floor(sr / kMaxHz)));
+        // Allocate once for the lowest pitch we will ever support
+        const int allocTau = std::max(16, static_cast<int>(std::ceil(sr / kMinHz)));
+        const int allocBuf = allocTau + allocTau + 2;
+
+        ring.assign(static_cast<size_t>(allocBuf), 0.0f);
+        lin.assign(static_cast<size_t>(allocBuf), 0.0f);
+        diffBuf.assign(static_cast<size_t>(allocTau + 2), 0.0f);
+        cmndBuf.assign(static_cast<size_t>(allocTau + 2), 0.0f);
+
+        minTau  = std::max(2, static_cast<int>(std::floor(sr / kMaxHz)));
+        hopSize = std::max(32, static_cast<int>(sr / 150.0));
+
+        setMinFrequency(kMinHz);
+    }
+
+    // Change the lowest pitch that is tracked. A higher value means a shorter
+    // analysis window (less delay). Does not allocate, so it is safe to call
+    // from the audio thread. Clears the detector's history.
+    void setMinFrequency (float hz)
+    {
+        hz = juce::jlimit(kMinHz, 400.0f, hz);
+        minHz = hz;
+
+        const int allocTau = static_cast<int>(diffBuf.size()) - 2;
+        maxTau   = juce::jlimit(16, allocTau, static_cast<int>(std::ceil(sr / hz)));
         integLen = maxTau;                       // samples compared per lag
         bufLen   = integLen + maxTau + 2;        // samples needed in total
-        hopSize  = std::max(32, static_cast<int>(sr / 150.0));
 
-        ring.assign(static_cast<size_t>(bufLen), 0.0f);
-        lin.assign(static_cast<size_t>(bufLen), 0.0f);
-        diffBuf.assign(static_cast<size_t>(maxTau + 2), 0.0f);
-        cmndBuf.assign(static_cast<size_t>(maxTau + 2), 0.0f);
-
+        std::fill(ring.begin(), ring.end(), 0.0f);
         writePos = 0;
         samplesSinceDetect = 0;
         haveResult = false;
@@ -50,6 +68,8 @@ public:
         detectedHz = 0.0f;
         confidence = 0.0f;
     }
+
+    float getMinFrequency() const { return minHz; }
 
     // Feed samples into the ring buffer.
     void feedSamples (const float* data, int numSamples)
@@ -157,7 +177,9 @@ public:
                     tauEst = tau;
                 }
             }
-            if (best > 0.5f)
+            // A weak match is more likely an octave error than a real pitch:
+            // better to leave the audio alone than to "correct" the wrong note.
+            if (best > 0.3f)
                 return setUnvoiced();
         }
 
@@ -231,6 +253,7 @@ private:
 
     double sr = 44100.0;
     int maxTau = 0, minTau = 0, integLen = 0, bufLen = 0, hopSize = 256;
+    float minHz = kMinHz;
     int writePos = 0;
     int samplesSinceDetect = 0;
     bool haveResult = false;

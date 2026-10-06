@@ -3,11 +3,12 @@
 #include "AutoTuneEngine.h"
 #include <JuceHeader.h>
 
-class HumHouseVocalTuneProcessor : public juce::AudioProcessor
+class HumHouseVocalTuneProcessor : public juce::AudioProcessor,
+                                     private juce::AsyncUpdater
 {
 public:
     HumHouseVocalTuneProcessor();
-    ~HumHouseVocalTuneProcessor() override = default;
+    ~HumHouseVocalTuneProcessor() override { cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -57,6 +58,11 @@ public:
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    // Tells the host about a latency change (must happen on the message thread)
+    void handleAsyncUpdate() override { setLatencySamples(pendingLatency.load()); }
+    std::atomic<int> pendingLatency { 0 };
+    int reportedLatency = 0;
 
     juce::AudioProcessorValueTreeState apvts;
     humtune::AutoTuneEngine engine;

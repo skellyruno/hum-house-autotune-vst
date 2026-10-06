@@ -88,5 +88,11 @@ private:
 
     void setupKnob (juce::Slider&, juce::Label&, const juce::String& text);
 
+    // Artwork (decoded once from Artwork.h; copies at draw size are rebuilt in resized())
+    juce::Image skullSolidImg, skullHoloImg, armImg;
+    juce::Image skullSolidScaled, skullHoloScaled, armScaled, armScaledFlipped;
+    float skullGlow = 0.0f;
+    void rebuildScaledArt();
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HumHouseVocalTuneEditor)
 };

@@ -116,8 +116,10 @@ HumHouseVocalTuneProcessor::HumHouseVocalTuneProcessor()
 // ---------------------------------------------------------------------------
 void HumHouseVocalTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    engine.setLowLatency(*apvts.getRawParameterValue("lowLatency") > 0.5f);
     engine.prepare(sampleRate, samplesPerBlock);
-    setLatencySamples(engine.getLatencySamples());
+    reportedLatency = engine.getLatencySamples();
+    setLatencySamples(reportedLatency);
 
     // Scratch buffer for the dry signal (allocated here, not on the audio thread)
     dryScratch.setSize(juce::jmax(2, getTotalNumInputChannels()), juce::jmax(1, samplesPerBlock));
@@ -166,6 +168,14 @@ void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     engine.setFormantPreserve(formant);
     engine.setLowLatency(lowLat);
     engine.setEnabled(on);
+
+    // The delay depends on the Low Latency switch: tell the host when it changes
+    if (engine.getLatencySamples() != reportedLatency)
+    {
+        reportedLatency = engine.getLatencySamples();
+        pendingLatency.store(reportedLatency);
+        triggerAsyncUpdate();
+    }
 
     if (anyOff)
         engine.setCustomScale(customScale);

@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "Artwork.h"
 
 using Palette = humtune::Palette;
 
@@ -17,6 +18,15 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
     : AudioProcessorEditor(p), proc(p)
 {
     setLookAndFeel(&lnf);
+
+    // Decode the embedded artwork once (see Artwork.h)
+    skullSolidImg = juce::ImageFileFormat::loadFrom(humtune::art::skullSolid,
+                                                     static_cast<size_t>(humtune::art::skullSolidSize));
+    skullHoloImg  = juce::ImageFileFormat::loadFrom(humtune::art::skullHolo,
+                                                     static_cast<size_t>(humtune::art::skullHoloSize));
+    armImg        = juce::ImageFileFormat::loadFrom(humtune::art::armHand,
+                                                     static_cast<size_t>(humtune::art::armHandSize));
+
     setSize(780, 620);
 
     auto& apvts = proc.getAPVTS();
@@ -124,6 +134,45 @@ void HumHouseVocalTuneEditor::setupKnob (juce::Slider& knob, juce::Label& label,
 }
 
 // ---------------------------------------------------------------------------
+// Artwork: make copies at the exact size they are drawn (done once, not every frame)
+// ---------------------------------------------------------------------------
+void HumHouseVocalTuneEditor::rebuildScaledArt()
+{
+    auto scaleTo = [](const juce::Image& src, int w, int h) -> juce::Image
+    {
+        if (! src.isValid() || w <= 0 || h <= 0)
+            return {};
+        return src.rescaled(w, h, juce::Graphics::highResamplingQuality);
+    };
+
+    // Skull + crossbones, drawn in the middle of the radar
+    const int skullW = 170;
+    if (skullSolidImg.isValid())
+    {
+        const int skullH = juce::roundToInt(static_cast<float>(skullW)
+                              * static_cast<float>(skullSolidImg.getHeight())
+                              / static_cast<float>(skullSolidImg.getWidth()));
+        skullSolidScaled = scaleTo(skullSolidImg, skullW, skullH);
+        skullHoloScaled  = scaleTo(skullHoloImg,  skullW, skullH);
+    }
+
+    // Arm + hand: one copy, and a mirrored copy for the right-hand side
+    const int armH = 270;
+    if (armImg.isValid())
+    {
+        const int armW = juce::roundToInt(static_cast<float>(armH)
+                              * static_cast<float>(armImg.getWidth())
+                              / static_cast<float>(armImg.getHeight()));
+        armScaled = scaleTo(armImg, armW, armH);
+
+        armScaledFlipped = juce::Image(juce::Image::ARGB, armW, armH, true);
+        juce::Graphics fg(armScaledFlipped);
+        fg.addTransform(juce::AffineTransform::scale(-1.0f, 1.0f).translated(static_cast<float>(armW), 0.0f));
+        fg.drawImageAt(armScaled, 0, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Timer — refresh display values
 // ---------------------------------------------------------------------------
 void HumHouseVocalTuneEditor::timerCallback()
@@ -147,6 +196,10 @@ void HumHouseVocalTuneEditor::timerCallback()
     majorBtn.setToggleState(scaleVal == 0, juce::dontSendNotification);
     minorBtn.setToggleState(scaleVal == 1, juce::dontSendNotification);
     chromBtn.setToggleState(scaleVal == 2, juce::dontSendNotification);
+
+    // The skull lights up with the singer's level (fast attack, quick release)
+    const float glowTarget = juce::jlimit(0.0f, 1.0f, displayInputLevel * 1.6f);
+    skullGlow += 0.35f * (glowTarget - skullGlow);
 
     repaint();
 }
@@ -240,6 +293,18 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
         g.drawLine(x1 - L, y1, x1, y1, 2.0f);   g.drawLine(x1, y1 - L, x1, y1, 2.0f);
     }
 
+    // --- Skeleton arms flanking the radar ---
+    if (armScaled.isValid())
+    {
+        const int armY  = 62;
+        const int armCx = 282;      // radar centre
+        const int dist  = 156;      // distance of each arm from the centre
+        g.setOpacity(0.9f);
+        g.drawImageAt(armScaled,        armCx - dist - armScaled.getWidth() / 2, armY);
+        g.drawImageAt(armScaledFlipped, armCx + dist - armScaled.getWidth() / 2, armY);
+        g.setOpacity(1.0f);
+    }
+
     // --- Radar-style pitch visualizer ---
     {
         const float cx = 282.0f;
@@ -319,6 +384,23 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
             g.fillEllipse(cx - ro, cy - ro, ro * 2.0f, ro * 2.0f);
         }
 
+        // Skull and crossbones (the hologram version fades in with the voice)
+        if (skullSolidScaled.isValid())
+        {
+            const int sx = static_cast<int>(cx) - skullSolidScaled.getWidth() / 2;
+            const int sy = static_cast<int>(cy) - skullSolidScaled.getHeight() / 2;
+
+            g.setOpacity(0.9f);
+            g.drawImageAt(skullSolidScaled, sx, sy);
+
+            if (skullHoloScaled.isValid() && skullGlow > 0.02f)
+            {
+                g.setOpacity(0.75f * skullGlow);
+                g.drawImageAt(skullHoloScaled, sx, sy);
+            }
+            g.setOpacity(1.0f);
+        }
+
         // Correction needle
         if (displayDetectedHz > 60.0f && displayConfidence > 0.3f)
         {
@@ -340,9 +422,9 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
             juce::String noteText = HumHouseVocalTuneProcessor::midiNoteToName(displayDetectedMidi);
             if (noteText.isEmpty()) noteText = "--";
 
-            auto noteRect = juce::Rectangle<int>(static_cast<int>(cx - 60.0f),
-                                                  static_cast<int>(cy - 30.0f), 120, 60);
-            g.setFont(juce::Font(juce::FontOptions(46.0f).withStyle("Bold")));
+            auto noteRect = juce::Rectangle<int>(static_cast<int>(cx - 50.0f),
+                                                  static_cast<int>(cy + 48.0f), 100, 36);
+            g.setFont(juce::Font(juce::FontOptions(28.0f).withStyle("Bold")));
             g.setColour(Palette::accent.withAlpha(0.14f));
             for (int dx = -2; dx <= 2; ++dx)
                 for (int dy = -2; dy <= 2; ++dy)
@@ -355,7 +437,7 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
             g.setColour(Palette::textDim);
             g.setFont(juce::Font(juce::FontOptions(13.0f)));
             g.drawText("Target: " + (tgt.isEmpty() ? "--" : tgt),
-                       static_cast<int>(cx - 60.0f), static_cast<int>(cy + 30.0f), 120, 18,
+                       static_cast<int>(cx - 50.0f), static_cast<int>(cy + 82.0f), 100, 16,
                        juce::Justification::centred, false);
         }
     }
@@ -546,4 +628,6 @@ void HumHouseVocalTuneEditor::resized()
         btn.setBounds(xOff, pianoY, blackW, blackH);
         btn.toFront(false);
     }
+
+    rebuildScaledArt();
 }

@@ -34,20 +34,37 @@ public:
     void prepare (double sampleRate, int /*blockSize*/)
     {
         sr = sampleRate;
-        maxPeriod = std::max(32, static_cast<int>(std::ceil(sr / kMinHz)));
-        minPeriod = std::max(4,  static_cast<int>(std::floor(sr / kMaxHz)));
-        latency   = static_cast<int>(std::ceil(2.5 * maxPeriod)) + 8;
 
-        inSize  = nextPow2(latency + 4 * maxPeriod + 2 * kChunk);
-        outSize = nextPow2(2 * latency + 6 * maxPeriod + 4 * kChunk);
+        // Buffers are sized once for the lowest pitch we ever support (kMinHz),
+        // so switching modes later never has to allocate.
+        const int maxPeriodAlloc = std::max(32, static_cast<int>(std::ceil(sr / kMinHz)));
+        const int latencyAlloc   = static_cast<int>(std::ceil(2.5 * maxPeriodAlloc)) + 8;
+
+        inSize  = nextPow2(latencyAlloc + 4 * maxPeriodAlloc + 2 * kChunk);
+        outSize = nextPow2(2 * latencyAlloc + 10 * maxPeriodAlloc + 4 * kChunk);
         inMask  = static_cast<int64_t>(inSize - 1);
         outMask = static_cast<int64_t>(outSize - 1);
 
         inRing.assign(static_cast<size_t>(inSize), 0.0f);
         outRing.assign(static_cast<size_t>(outSize), 0.0f);
 
+        minPeriod = std::max(4, static_cast<int>(std::floor(sr / kMaxHz)));
+        setMinFrequency(kMinHz);
+    }
+
+    // Lowest pitch handled. Higher = less delay. Clears the internal state.
+    // Does not allocate.
+    void setMinFrequency (double hz)
+    {
+        hz        = juce::jlimit(kMinHz, 400.0, hz);
+        maxPeriod = std::max(32, static_cast<int>(std::ceil(sr / hz)));
+        latency   = static_cast<int>(std::ceil(2.5 * maxPeriod)) + 8;
         reset();
     }
+
+    // true  = keep the singer's formants (natural sound)
+    // false = formants move with the pitch (robotic / "chipmunk" sound)
+    void setFormantPreserve (bool on) { formantPreserve = on; }
 
     void reset()
     {
@@ -111,11 +128,20 @@ private:
         inCount += m;
 
         // 2) Lay down every grain whose source audio is now available.
-        //    The window is exactly two periods long and is evaluated at the exact
-        //    fractional position, so with no pitch change the output is an
-        //    exact (delayed) copy of the input.
-        const double hop  = periodF / ratio;
-        const float  gain = static_cast<float>(hop / periodF);   // = 1 / ratio
+        //    Formants kept:  window = 2 periods, source read at normal speed.
+        //    Formants moved: window shrinks/grows with the pitch and the source
+        //                    is read at speed `ratio` (the grain is resampled).
+        //    In both cases the grains are spaced period / ratio apart, which is
+        //    what sets the output pitch.
+        const double hop = periodF / ratio;
+
+        double halfWin = formantPreserve ? periodF : periodF / ratio;
+        // Never ask for more future output than the fixed delay can cover
+        halfWin = std::min(halfWin, static_cast<double>(latency) - 1.5 * periodF - 8.0);
+        halfWin = std::max(halfWin, 0.5 * periodF);
+        const double rate = periodF / halfWin;           // source samples per output sample
+        const float  gain = static_cast<float>(hop / halfWin);
+        const float  piOverW = juce::MathConstants<float>::pi / static_cast<float>(halfWin);
 
         for (;;)
         {
@@ -125,38 +151,34 @@ private:
             while (markPos + 0.5 * periodF < ta0)
                 markPos += periodF;
 
-            // Output sample o is read from input position  o + base  (fractional).
-            const double  base    = markPos - nextTs;
-            const double  baseFl  = std::floor(base);
-            const float   t       = static_cast<float>(base - baseFl);
-            const int64_t baseInt = static_cast<int64_t>(baseFl);
-
-            const int64_t oFirst = static_cast<int64_t>(std::ceil (nextTs - periodF));
-            const int64_t oLast  = static_cast<int64_t>(std::floor(nextTs + periodF));
-
-            if (baseInt + oLast + 2 >= inCount)
+            // The grain reads source audio from markPos - periodF to markPos + periodF
+            if (static_cast<int64_t>(std::floor(markPos + periodF)) + 3 >= inCount)
                 break;                       // source audio not here yet
 
-            // Catmull-Rom (cubic) interpolation weights for the fractional part
-            const float t2 = t * t, t3 = t2 * t;
-            const float c0 = -0.5f * t3 + t2 - 0.5f * t;
-            const float c1 =  1.5f * t3 - 2.5f * t2 + 1.0f;
-            const float c2 = -1.5f * t3 + 2.0f * t2 + 0.5f * t;
-            const float c3 =  0.5f * t3 - 0.5f * t2;
-
-            const float piOverP = juce::MathConstants<float>::pi / static_cast<float>(periodF);
+            const int64_t oFirst = static_cast<int64_t>(std::ceil (nextTs - halfWin));
+            const int64_t oLast  = static_cast<int64_t>(std::floor(nextTs + halfWin));
 
             for (int64_t o = std::max(oFirst, outRead); o <= oLast; ++o)
             {
-                const int64_t a = baseInt + o;
+                // Hann window, centred on nextTs, total length 2 * halfWin
+                const float x = static_cast<float>(static_cast<double>(o) - nextTs + halfWin);
+                if (x <= 0.0f)
+                    continue;
+                const float w = 0.5f * (1.0f - std::cos(piOverW * x));
+
+                // Exact (fractional) source position, cubic interpolation
+                const double  pos = markPos + (static_cast<double>(o) - nextTs) * rate;
+                const double  fl  = std::floor(pos);
+                const int64_t a   = static_cast<int64_t>(fl);
                 if (a < 1)
                     continue;                // before the start of the stream
 
-                // Hann window, centred on nextTs, total length 2 * periodF
-                const float x = static_cast<float>(static_cast<double>(o) - nextTs + periodF);
-                if (x <= 0.0f)
-                    continue;
-                const float w = 0.5f * (1.0f - std::cos(piOverP * x));
+                const float t  = static_cast<float>(pos - fl);
+                const float t2 = t * t, t3 = t2 * t;
+                const float c0 = -0.5f * t3 + t2 - 0.5f * t;
+                const float c1 =  1.5f * t3 - 2.5f * t2 + 1.0f;
+                const float c2 = -1.5f * t3 + 2.0f * t2 + 0.5f * t;
+                const float c3 =  0.5f * t3 - 0.5f * t2;
 
                 const float s = c0 * inRing[static_cast<size_t>((a - 1) & inMask)]
                               + c1 * inRing[static_cast<size_t>( a      & inMask)]
@@ -191,6 +213,7 @@ private:
     double  nextTs  = 0.0;    // where the next grain's centre goes (output time)
     double  markPos = 0.0;    // current analysis mark (input time)
     double  lastPeriod = 220.0;
+    bool    formantPreserve = true;
 };
 
 } // namespace humtune

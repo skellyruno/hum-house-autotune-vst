@@ -30,6 +30,7 @@ public:
     static constexpr std::array<bool, 12> kChromatic = {true,true,true,true,true,true,true,true,true,true,true,true};
 
     static constexpr int kMaxChannels = 2;
+    static constexpr float kLowLatencyMinHz = 130.0f;   // about C3
 
     void prepare (double sampleRate, int blockSize)
     {
@@ -38,22 +39,17 @@ public:
         for (auto& s : shifters)
             s.prepare(sampleRate, blockSize);
 
-        smoothedCorrectionCents = 0.0;
-        lockedMidiNote = -1;
-        holdCounter = 0;
-
-        latencySamples = shifters[0].getLatencySamples();
-
-        // Dry delay lines (same delay as the shifter)
+        // The longest delay we can ever need (lowest supported pitch)
+        const int maxLatency = static_cast<int>(std::ceil(2.5 * std::ceil(sr / PitchDetector::kMinHz))) + 16;
         for (auto& line : dryLine)
-            line.assign(static_cast<size_t>(latencySamples), 0.0f);
-        dryPos = 0;
+            line.reserve(static_cast<size_t>(maxLatency));
 
-        lastDetectedHz = lastTargetHz = lastCorrectionCents = 0.0f;
-        lastDetectedMidi = lastTargetMidi = -1;
+        prepared = true;
+        applyLatencyMode();
     }
 
-    int getLatencySamples() const { return latencySamples; }
+    int   getLatencySamples() const { return latencySamples; }
+    float getMinFrequency()   const { return detector.getMinFrequency(); }
 
     // ---- Parameter setters ----
     void setRootNote        (int note)    { rootNote = note % 12; }
@@ -66,7 +62,17 @@ public:
     void setFormantPreserve (bool on)     { formantPreserve = on; }
     void setReferenceFreq   (float hz)    { referenceFreq = hz; }
     void setEnabled         (bool on)     { enabled = on; }
-    void setLowLatency      (bool on)     { lowLatency = on; }
+    // Low latency: only tracks pitches above ~130 Hz, in exchange for less delay.
+    // Safe to call from the audio thread (no allocation). The latency changes,
+    // so the host must be told: see getLatencySamples().
+    void setLowLatency      (bool on)
+    {
+        if (on == lowLatency)
+            return;
+        lowLatency = on;
+        if (prepared)
+            applyLatencyMode();
+    }
     void setCustomScale     (const std::array<bool, 12>& s) { customScale = s; useCustom = true; }
     void clearCustomScale   ()            { useCustom = false; }
 
@@ -134,7 +140,7 @@ public:
             const float detectedHz = detector.detectPitch();
             lastDetectedHz = detectedHz;
 
-            const bool voiced = detectedHz >= PitchDetector::kMinHz
+            const bool voiced = detectedHz >= detector.getMinFrequency()
                              && detectedHz <= PitchDetector::kMaxHz
                              && detector.getConfidence() >= 0.3f;
 
@@ -212,11 +218,38 @@ public:
         // --- Always run the shifter so the delay stays constant ---
         const int nch = std::min(numChannels, kMaxChannels);
         for (int ch = 0; ch < nch; ++ch)
+        {
+            shifters[static_cast<size_t>(ch)].setFormantPreserve(formantPreserve);
             shifters[static_cast<size_t>(ch)].process(buffer.getWritePointer(ch), numSamples,
                                                       periodSamples, shiftRatio);
+        }
     }
 
 private:
+    // Re-configures detector, shifters and dry delay for the current latency mode.
+    // No memory is allocated (everything was reserved in prepare()).
+    void applyLatencyMode()
+    {
+        const float minHz = lowLatency ? kLowLatencyMinHz : PitchDetector::kMinHz;
+
+        detector.setMinFrequency(minHz);
+        for (auto& s : shifters)
+            s.setMinFrequency(static_cast<double>(minHz));
+
+        latencySamples = shifters[0].getLatencySamples();
+
+        for (auto& line : dryLine)
+            line.assign(static_cast<size_t>(latencySamples), 0.0f);
+        dryPos = 0;
+
+        smoothedCorrectionCents = 0.0;
+        lockedMidiNote = -1;
+        holdCounter = 0;
+
+        lastDetectedHz = lastTargetHz = lastCorrectionCents = 0.0f;
+        lastDetectedMidi = lastTargetMidi = -1;
+    }
+
     int quantizeToScale (float midiNote) const
     {
         const auto& scale = useCustom ? customScale
@@ -267,6 +300,7 @@ private:
     float referenceFreq  = 440.0f;
     bool  enabled        = true;
     bool  lowLatency     = false;
+    bool  prepared       = false;
     bool  useCustom      = false;
     std::array<bool, 12> customScale = kChromatic;
 
