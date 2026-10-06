@@ -149,6 +149,7 @@ private:
     int ringSize = 4096;
     int inPos = 0;
     double readPos = 0.0;
+    double outPos = 0.0;
     double lastPeriod = 220.0;
     double minHz = kMinHz;
 
