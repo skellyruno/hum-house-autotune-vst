@@ -15,7 +15,8 @@
 //   - Bottom bar: scale selector, pitch reference
 
 class HumHouseVocalTuneEditor : public juce::AudioProcessorEditor,
-                                 private juce::Timer
+                                public juce::AudioProcessorParameter::Listener,
+                                private juce::Timer
 {
 public:
     explicit HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor&);
@@ -23,6 +24,10 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+
+    // Implement listener interface
+    void parameterValueChanged(int parameterIndex, float newValue) override;
+    void parameterGestureChanged(int parameterIndex, bool gestureIsStarting) override;
 
 private:
     void timerCallback() override;
