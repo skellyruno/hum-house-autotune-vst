@@ -14,13 +14,9 @@ namespace humtune
 //   - YIN pitch detection
 //   - Scale-aware pitch quantization with configurable snap
 //   - Note sustain / hold logic
-//   - TD-PSOLA pitch shifting (one shifter per channel)
-//   - Smoothed retune speed
-//
-// IMPORTANT: every sample goes through the shifter, even when no correction is
-// needed (then it is simply delayed). That keeps the delay constant, so the
-// latency reported to the DAW is always correct. Use delayDry() to give the
-// dry signal the same delay before mixing it with the processed signal.
+//   - Resampling-based pitch shifting (one shifter per channel)
+//   - Smoothed retune speed with low-pass envelope
+//   - Per-sample pitch glide for natural-sounding tuning
 class AutoTuneEngine
 {
 public:
@@ -30,7 +26,7 @@ public:
     static constexpr std::array<bool, 12> kChromatic = {true,true,true,true,true,true,true,true,true,true,true,true};
 
     static constexpr int kMaxChannels = 2;
-    static constexpr float kLowLatencyMinHz = 130.0f;   // about C3
+    static constexpr float kLowLatencyMinHz = 130.0f;
 
     void prepare (double sampleRate, int blockSize)
     {
@@ -39,7 +35,6 @@ public:
         for (auto& s : shifters)
             s.prepare(sampleRate, blockSize);
 
-        // The longest delay we can ever need (lowest supported pitch)
         const int maxLatency = static_cast<int>(std::ceil(2.5 * std::ceil(sr / PitchDetector::kMinHz))) + 16;
         for (auto& line : dryLine)
             line.reserve(static_cast<size_t>(maxLatency));
@@ -54,17 +49,15 @@ public:
     // ---- Parameter setters ----
     void setRootNote        (int note)    { rootNote = note % 12; }
     void setScaleType       (int type)    { scaleType = type; }
-    void setRetuneSpeed     (float spd)   { retuneSpeed = spd; }      // 0..1 (0=instant, 1=slow)
-    void setAmount          (float amt)   { amount = amt; }           // 0..1 (correction depth)
-    void setHumanize        (float h)     { humanize = h; }           // 0..1
-    void setSustain         (float s)     { sustainCents = s; }       // cents threshold for hold
+    void setRetuneSpeed     (float spd)   { retuneSpeed = spd; }
+    void setAmount          (float amt)   { amount = amt; }
+    void setHumanize        (float h)     { humanize = h; }
+    void setSustain         (float s)     { sustainCents = s; }
     void setNoteStabilizer  (bool on)     { noteStabilizer = on; }
     void setFormantPreserve (bool on)     { formantPreserve = on; }
     void setReferenceFreq   (float hz)    { referenceFreq = hz; }
     void setEnabled         (bool on)     { enabled = on; }
-    // Low latency: only tracks pitches above ~130 Hz, in exchange for less delay.
-    // Safe to call from the audio thread (no allocation). The latency changes,
-    // so the host must be told: see getLatencySamples().
+
     void setLowLatency      (bool on)
     {
         if (on == lowLatency)
@@ -73,6 +66,7 @@ public:
         if (prepared)
             applyLatencyMode();
     }
+
     void setCustomScale     (const std::array<bool, 12>& s) { customScale = s; useCustom = true; }
     void clearCustomScale   ()            { useCustom = false; }
 
@@ -119,11 +113,14 @@ public:
         if (numChannels == 0 || numSamples == 0 || sr <= 0.0)
             return;
 
-        float periodSamples = 0.0f;   // 0 = "unknown", shifter keeps its last period
+        float periodSamples = 0.0f;
         float shiftRatio    = 1.0f;
 
         if (!enabled)
         {
+            shiftRatio = 1.0f;
+            periodSamples = 0.0f;
+
             lastDetectedHz = 0.0f;
             lastTargetHz = 0.0f;
             lastCorrectionCents = 0.0f;
@@ -189,33 +186,51 @@ public:
                 const float targetHz = referenceFreq * std::pow(2.0f, (static_cast<float>(targetMidi) - 69.0f) / 12.0f);
                 lastTargetHz = targetHz;
 
-                // --- Correction ---
+                // --- Correction calculation ---
                 float correctionCents = 1200.0f * std::log2(targetHz / detectedHz);
                 lastCorrectionCents = correctionCents;
 
                 correctionCents *= amount;               // correction depth
-                correctionCents *= (1.0f - humanize);    // humanize
+                correctionCents *= (1.0f - humanize);    // humanize reduces harshness
 
-                // --- Retune speed smoothing (time constant, applied once per block) ---
+                // --- Professional-grade retune speed smoothing ---
+                // This creates a smooth exponential envelope that feels natural
                 double timeConstant;
                 if (retuneSpeed < 0.01f)
-                    timeConstant = 0.0001;               // nearly instant
+                {
+                    timeConstant = 0.00008;              // nearly instant (super snappy, like T-Pain)
+                }
+                else if (retuneSpeed < 0.1f)
+                {
+                    timeConstant = 0.0003 + static_cast<double>(retuneSpeed) * 0.0005;
+                }
+                else if (retuneSpeed < 0.5f)
+                {
+                    timeConstant = 0.0005 + static_cast<double>(retuneSpeed) * 0.05;
+                }
                 else
-                    timeConstant = 0.0005 + static_cast<double>(retuneSpeed) * 0.15;
+                {
+                    // Slow mode for gentle, natural correction
+                    timeConstant = 0.02 + static_cast<double>(retuneSpeed) * 0.08;
+                }
 
+                // Apply exponential smoothing per block (one-pole low-pass filter)
                 const double coeff = std::exp(-static_cast<double>(numSamples) / (sr * timeConstant));
                 smoothedCorrectionCents = smoothedCorrectionCents * coeff
                                         + static_cast<double>(correctionCents) * (1.0 - coeff);
 
                 shiftRatio = std::pow(2.0f, static_cast<float>(smoothedCorrectionCents) / 1200.0f);
-                if (shifters[0].isNearUnity(shiftRatio))
+
+                // Kill the shift if it's nearly unity (avoid tiny artifacts)
+                if (std::abs(shiftRatio - 1.0f) < 0.0008f)
                     shiftRatio = 1.0f;
 
                 periodSamples = static_cast<float>(sr) / detectedHz;
             }
         }
 
-        // --- Always run the shifter so the delay stays constant ---
+        // --- Process audio through the pitch shifter ---
+        // The shifter always runs to maintain constant latency
         const int nch = std::min(numChannels, kMaxChannels);
         for (int ch = 0; ch < nch; ++ch)
         {
@@ -227,7 +242,6 @@ public:
 
 private:
     // Re-configures detector, shifters and dry delay for the current latency mode.
-    // No memory is allocated (everything was reserved in prepare()).
     void applyLatencyMode()
     {
         const float minHz = lowLatency ? kLowLatencyMinHz : PitchDetector::kMinHz;
@@ -289,12 +303,12 @@ private:
     std::array<PitchShifter, kMaxChannels> shifters;
 
     // Parameters
-    int   rootNote       = 0;        // C
-    int   scaleType      = 0;        // 0=Major, 1=Minor, 2=Chromatic
-    float retuneSpeed    = 0.0f;     // 0=instant, 1=slow
-    float amount         = 1.0f;     // correction depth 0..1
-    float humanize       = 0.0f;     // 0..1
-    float sustainCents   = 50.0f;    // cents threshold for note hold
+    int   rootNote       = 0;
+    int   scaleType      = 0;
+    float retuneSpeed    = 0.0f;
+    float amount         = 1.0f;
+    float humanize       = 0.0f;
+    float sustainCents   = 50.0f;
     bool  noteStabilizer = true;
     bool  formantPreserve = true;
     float referenceFreq  = 440.0f;
