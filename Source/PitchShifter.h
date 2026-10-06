@@ -19,10 +19,8 @@ public:
     {
         sr = sampleRate;
 
-        // Fixed latency gives us predictable host compensation.
-        // 30 ms is enough for a clean, audible retune without harsh artifacts.
-        latency = static_cast<int>(std::ceil(0.03 * sr));
-        latency = std::max(2048, latency);
+        // ~5 ms latency: low enough for live tuning, high enough for clean resampling
+        latency = std::max(256, static_cast<int>(std::ceil(sr * 0.005)));
 
         const int minBuffer = std::max(4096, blockSize * 8);
         ringSize = nextPow2(minBuffer + latency * 2);
@@ -48,7 +46,7 @@ public:
     {
         std::fill(ring.begin(), ring.end(), 0.0f);
         writePos = 0;
-        readPhase = 0.0;
+        sourcePhase = 0.0;
         lastPeriod = juce::jlimit(static_cast<double>(minPeriod),
                                  static_cast<double>(maxPeriod),
                                  sr / 200.0);
@@ -71,40 +69,33 @@ public:
         lastPeriod = periodF;
 
         const double ratio = std::isfinite(shiftRatio)
-                           ? juce::jlimit(0.5, 2.0, static_cast<double>(shiftRatio))
+                           ? juce::jlimit(0.75, 1.25, static_cast<double>(shiftRatio))
                            : 1.0;
 
-        // This is a direct resampling pitch shift:
-        //   ratio > 1.0 = pitch up
-        //   ratio < 1.0 = pitch down
-        // The delay line keeps the output time-aligned with the host.
+        // This is a controlled resampling shifter:
+        //  ratio > 1.0 = pitch up
+        //  ratio < 1.0 = pitch down
+        // We keep it close to 1.0 so the tuning is accurate, not excessive.
         for (int i = 0; i < numSamples; ++i)
         {
-            // Write current input into the delay line
             ring[static_cast<size_t>(writePos)] = data[i];
             writePos = (writePos + 1) % ringSize;
 
-            // Read from a delayed position, stepping through the ring at a rate controlled by ratio
-            // This gives a clean, audible retune even for small correction values.
-            double sourcePos = static_cast<double>(writePos) - static_cast<double>(latency) + readPhase;
+            const double readPos = static_cast<double>(writePos) - static_cast<double>(latency) + sourcePhase;
 
-            while (sourcePos < 0.0)
-                sourcePos += static_cast<double>(ringSize);
-            while (sourcePos >= static_cast<double>(ringSize))
-                sourcePos -= static_cast<double>(ringSize);
+            double pos = readPos;
+            while (pos < 0.0)
+                pos += static_cast<double>(ringSize);
+            while (pos >= static_cast<double>(ringSize))
+                pos -= static_cast<double>(ringSize);
 
-            const float out = cubicInterpolate(sourcePos);
+            data[i] = cubicInterpolate(pos);
 
-            // The formant flag is kept for compatibility; in this implementation it doesn't
-            // materially change the algorithm because the phase alignment is already stable.
-            (void) formantPreserve;
-
-            data[i] = out;
-
-            // Advance the read pointer by the shift ratio
-            readPhase += ratio;
-            while (readPhase >= static_cast<double>(ringSize))
-                readPhase -= static_cast<double>(ringSize);
+            sourcePhase += ratio;
+            while (sourcePhase >= static_cast<double>(ringSize))
+                sourcePhase -= static_cast<double>(ringSize);
+            while (sourcePhase < 0.0)
+                sourcePhase += static_cast<double>(ringSize);
         }
     }
 
@@ -152,10 +143,10 @@ private:
     double sr = 44100.0;
     int minPeriod = 32;
     int maxPeriod = 800;
-    int latency = 2048;
+    int latency = 256;
     int ringSize = 4096;
     int writePos = 0;
-    double readPhase = 0.0;
+    double sourcePhase = 0.0;
     double lastPeriod = 220.0;
     double minHz = kMinHz;
 
