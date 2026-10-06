@@ -18,17 +18,15 @@ public:
     void prepare (double sampleRate, int blockSize)
     {
         sr = sampleRate;
-
-        // ~5 ms latency: low enough for live tuning, high enough for clean resampling
-        latency = std::max(256, static_cast<int>(std::ceil(sr * 0.005)));
-
-        const int minBuffer = std::max(4096, blockSize * 8);
-        ringSize = nextPow2(minBuffer + latency * 2);
-        ring.assign(static_cast<size_t>(ringSize), 0.0f);
-
+        latency = std::max(512, static_cast<int>(std::ceil(sr * 0.01)));
+        
+        ringSize = nextPow2(latency * 4 + blockSize * 8);
+        inBuffer.assign(static_cast<size_t>(ringSize), 0.0f);
+        outBuffer.assign(static_cast<size_t>(ringSize), 0.0f);
+        
         minPeriod = std::max(4, static_cast<int>(std::floor(sr / kMaxHz)));
         maxPeriod = std::max(32, static_cast<int>(std::ceil(sr / kMinHz)));
-
+        
         reset();
     }
 
@@ -44,58 +42,77 @@ public:
 
     void reset()
     {
-        std::fill(ring.begin(), ring.end(), 0.0f);
-        writePos = 0;
-        sourcePhase = 0.0;
-        lastPeriod = juce::jlimit(static_cast<double>(minPeriod),
-                                 static_cast<double>(maxPeriod),
-                                 sr / 200.0);
+        std::fill(inBuffer.begin(), inBuffer.end(), 0.0f);
+        std::fill(outBuffer.begin(), outBuffer.end(), 0.0f);
+        inPos = 0;
+        outPos = 0;
+        lastPeriod = sr / 200.0;
     }
 
     int getLatencySamples() const { return latency; }
 
     void process (float* data, int numSamples, float periodSamples, float shiftRatio)
     {
-        if (numSamples <= 0 || ring.empty())
+        if (numSamples <= 0 || inBuffer.empty())
             return;
 
         double periodF = lastPeriod;
         if (std::isfinite(periodSamples) && periodSamples >= static_cast<float>(minPeriod))
             periodF = static_cast<double>(periodSamples);
-
+        
         periodF = juce::jlimit(static_cast<double>(minPeriod),
                                static_cast<double>(maxPeriod),
                                periodF);
         lastPeriod = periodF;
 
         const double ratio = std::isfinite(shiftRatio)
-                           ? juce::jlimit(0.75, 1.25, static_cast<double>(shiftRatio))
+                           ? juce::jlimit(0.9, 1.1, static_cast<double>(shiftRatio))
                            : 1.0;
 
-        // This is a controlled resampling shifter:
-        //  ratio > 1.0 = pitch up
-        //  ratio < 1.0 = pitch down
-        // We keep it close to 1.0 so the tuning is accurate, not excessive.
+        // If ratio is unity, just pass through with delay
+        if (std::abs(ratio - 1.0) < 0.0001)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                inBuffer[static_cast<size_t>(inPos)] = data[i];
+                inPos = (inPos + 1) % ringSize;
+                
+                int readPos = (inPos - latency + ringSize) % ringSize;
+                data[i] = inBuffer[static_cast<size_t>(readPos)];
+            }
+            return;
+        }
+
+        // Simple time-stretch: read at a variable rate determined by ratio
         for (int i = 0; i < numSamples; ++i)
         {
-            ring[static_cast<size_t>(writePos)] = data[i];
-            writePos = (writePos + 1) % ringSize;
+            inBuffer[static_cast<size_t>(inPos)] = data[i];
+            inPos = (inPos + 1) % ringSize;
 
-            const double readPos = static_cast<double>(writePos) - static_cast<double>(latency) + sourcePhase;
+            // Calculate read position: we want to read at a rate that produces the pitch shift
+            int readIdx = (inPos - latency + ringSize) % ringSize;
+            
+            // The magic: if ratio > 1.0, we read faster through the buffer (pitch up)
+            // if ratio < 1.0, we read slower (pitch down)
+            // This is done by advancing readPos at rate = 1/ratio
+            readPos += 1.0 / ratio;
+            
+            // Wrap around
+            while (readPos >= static_cast<double>(ringSize))
+                readPos -= static_cast<double>(ringSize);
+            while (readPos < 0.0)
+                readPos += static_cast<double>(ringSize);
 
-            double pos = readPos;
-            while (pos < 0.0)
-                pos += static_cast<double>(ringSize);
-            while (pos >= static_cast<double>(ringSize))
-                pos -= static_cast<double>(ringSize);
-
-            data[i] = cubicInterpolate(pos);
-
-            sourcePhase += ratio;
-            while (sourcePhase >= static_cast<double>(ringSize))
-                sourcePhase -= static_cast<double>(ringSize);
-            while (sourcePhase < 0.0)
-                sourcePhase += static_cast<double>(ringSize);
+            // Cubic interpolation for smooth resampling
+            int idx = static_cast<int>(readPos);
+            double frac = readPos - std::floor(readPos);
+            
+            float s0 = inBuffer[static_cast<size_t>((idx - 1 + ringSize) % ringSize)];
+            float s1 = inBuffer[static_cast<size_t>(idx)];
+            float s2 = inBuffer[static_cast<size_t>((idx + 1) % ringSize)];
+            float s3 = inBuffer[static_cast<size_t>((idx + 2) % ringSize)];
+            
+            data[i] = cubicHermite(s0, s1, s2, s3, static_cast<float>(frac));
         }
     }
 
@@ -108,49 +125,34 @@ private:
     static int nextPow2 (int v)
     {
         int p = 1;
-        while (p < v)
-            p <<= 1;
+        while (p < v) p <<= 1;
         return p;
     }
 
-    float cubicInterpolate (double pos) const
+    static float cubicHermite(float y0, float y1, float y2, float y3, float t)
     {
-        const double fp = std::floor(pos);
-        const int i0 = static_cast<int>(fp);
-        const int i1 = (i0 + 1) & (ringSize - 1);
-        const int i2 = (i0 + 2) & (ringSize - 1);
-        const int i3 = (i0 + 3) & (ringSize - 1);
+        float t2 = t * t;
+        float t3 = t2 * t;
 
-        const double t = pos - fp;
-        const double t2 = t * t;
-        const double t3 = t2 * t;
+        float c0 = y1;
+        float c1 = 0.5f * (y2 - y0);
+        float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+        float c3 = 1.5f * (y1 - y2) + 0.5f * (y3 - y0);
 
-        const double c0 = -0.5 * t3 + t2 - 0.5 * t;
-        const double c1 =  1.5 * t3 - 2.5 * t2 + 1.0;
-        const double c2 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
-        const double c3 =  0.5 * t3 - 0.5 * t2;
-
-        const float s0 = ring[static_cast<size_t>(i0)];
-        const float s1 = ring[static_cast<size_t>(i1)];
-        const float s2 = ring[static_cast<size_t>(i2)];
-        const float s3 = ring[static_cast<size_t>(i3)];
-
-        return static_cast<float>(
-            c0 * s0 + c1 * s1 + c2 * s2 + c3 * s3
-        );
+        return c0 + c1 * t + c2 * t2 + c3 * t3;
     }
 
     double sr = 44100.0;
     int minPeriod = 32;
     int maxPeriod = 800;
-    int latency = 256;
+    int latency = 512;
     int ringSize = 4096;
-    int writePos = 0;
-    double sourcePhase = 0.0;
+    int inPos = 0;
+    double readPos = 0.0;
     double lastPeriod = 220.0;
     double minHz = kMinHz;
 
-    std::vector<float> ring;
+    std::vector<float> inBuffer, outBuffer;
     bool formantPreserve = true;
 };
 
