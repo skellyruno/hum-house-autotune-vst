@@ -14,7 +14,8 @@ namespace humtune
 //   - YIN pitch detection
 //   - Scale-aware pitch quantization with configurable snap
 //   - Note sustain / hold logic
-//   - Pitch shifting with smoothing and pass-through bypass
+//   - TD-PSOLA pitch shifting (one shifter per channel)
+//   - Smoothed retune speed
 class AutoTuneEngine
 {
 public:
@@ -29,7 +30,6 @@ public:
     {
         sr = sampleRate;
         detector.prepare(sampleRate, blockSize);
-
         for (auto& s : shifters)
             s.prepare(sampleRate, blockSize);
 
@@ -113,9 +113,6 @@ public:
 
         if (!enabled)
         {
-            shiftRatio = 1.0f;
-            periodSamples = 0.0f;
-
             lastDetectedHz = 0.0f;
             lastTargetHz = 0.0f;
             lastCorrectionCents = 0.0f;
@@ -206,9 +203,6 @@ public:
 
             if (std::abs(shiftRatio - 1.0f) < 0.0008f)
                 shiftRatio = 1.0f;
-
-            // clamp to sane range
-            shiftRatio = juce::jlimit(0.9f, 1.1f, shiftRatio);
 
             periodSamples = static_cast<float>(sr) / detectedHz;
         }
