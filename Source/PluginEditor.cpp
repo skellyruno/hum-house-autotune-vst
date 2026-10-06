@@ -5,15 +5,11 @@ using Palette = humtune::Palette;
 
 static const juce::StringArray kNoteNames {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
 
-// Which piano keys are "black"
 static constexpr bool isBlackKey (int idx)
 {
     return idx == 1 || idx == 3 || idx == 6 || idx == 8 || idx == 10;
 }
 
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
 HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
     : AudioProcessorEditor(p), proc(p)
 {
@@ -59,6 +55,7 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
         {
             if (auto* param = apvts.getParameter("scaleType"))
                 param->setValueNotifyingHost(param->convertTo0to1(static_cast<float>(scaleIdx)));
+            repaint();
         };
         addAndMakeVisible(btn);
     };
@@ -85,6 +82,12 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
     addAndMakeVisible(rootNoteLabel);
     rootNoteAtt = std::make_unique<ComboAttach>(apvts, "rootNote", rootNoteBox);
 
+    // Root note callback to trigger repaint
+    if (auto* rootParam = apvts.getParameter("rootNote"))
+    {
+        rootParam->addListener(this);
+    }
+
     for (int i = 0; i < 12; ++i)
     {
         auto& btn = noteButtons[static_cast<size_t>(i)];
@@ -106,12 +109,22 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
 
 HumHouseVocalTuneEditor::~HumHouseVocalTuneEditor()
 {
+    if (auto* rootParam = proc.getAPVTS().getParameter("rootNote"))
+    {
+        rootParam->removeListener(this);
+    }
     setLookAndFeel(nullptr);
 }
 
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
+void HumHouseVocalTuneEditor::parameterValueChanged (int /*parameterIndex*/, float /*newValue*/)
+{
+    repaint();
+}
+
+void HumHouseVocalTuneEditor::parameterGestureChanged (int /*parameterIndex*/, bool /*gestureIsStarting*/)
+{
+}
+
 void HumHouseVocalTuneEditor::setupKnob (juce::Slider& knob, juce::Label& label,
                                             const juce::String& text)
 {
@@ -126,9 +139,6 @@ void HumHouseVocalTuneEditor::setupKnob (juce::Slider& knob, juce::Label& label,
     addAndMakeVisible(label);
 }
 
-// ---------------------------------------------------------------------------
-// Artwork
-// ---------------------------------------------------------------------------
 void HumHouseVocalTuneEditor::rebuildScaledArt()
 {
     auto scaleTo = [](const juce::Image& src, int w, int h) -> juce::Image
@@ -163,9 +173,6 @@ void HumHouseVocalTuneEditor::rebuildScaledArt()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Timer
-// ---------------------------------------------------------------------------
 void HumHouseVocalTuneEditor::timerCallback()
 {
     displayDetectedHz      = proc.getDetectedHz();
@@ -192,9 +199,6 @@ void HumHouseVocalTuneEditor::timerCallback()
     repaint();
 }
 
-// ---------------------------------------------------------------------------
-// Paint
-// ---------------------------------------------------------------------------
 void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
 {
     const float twoPi = juce::MathConstants<float>::twoPi;
@@ -505,6 +509,7 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
     g.drawText("Confidence: " + confStr,
                infoX, 500, infoW, 16, juce::Justification::centredLeft, false);
 
+    // PIANO WITH SCALE/KEY HIGHLIGHTING
     {
         auto pianoArea = juce::Rectangle<float>(20.0f, 444.0f, 574.0f, 160.0f);
         g.setColour(Palette::bgPanel);
@@ -512,17 +517,20 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
         g.setColour(Palette::accentDim);
         g.drawRoundedRectangle(pianoArea, 6.0f, 1.2f);
 
+        // Get current scale and root from parameters
         int rootNote = static_cast<int>(*proc.getAPVTS().getRawParameterValue("rootNote"));
         int scaleType = static_cast<int>(*proc.getAPVTS().getRawParameterValue("scaleType"));
 
-        bool kMajor[12]     = {true,false,true,false,true,true,false,true,false,true,false,true};
-        bool kMinor[12]     = {true,false,true,true,false,true,false,true,true,false,true,false};
-        bool kChromatic[12] = {true,true,true,true,true,true,true,true,true,true,true,true};
+        // Scale arrays
+        const bool kMajor[12]     = {true,false,true,false,true,true,false,true,false,true,false,true};
+        const bool kMinor[12]     = {true,false,true,true,false,true,false,true,true,false,true,false};
+        const bool kChromatic[12] = {true,true,true,true,true,true,true,true,true,true,true,true};
 
-        bool* scale = (scaleType == 1) ? kMinor
-                   : (scaleType == 2) ? kChromatic
-                   : kMajor;
+        const bool* scale = (scaleType == 1) ? kMinor
+                          : (scaleType == 2) ? kChromatic
+                          : kMajor;
 
+        // Calculate which notes are in the scale
         bool noteInScale[12];
         for (int i = 0; i < 12; ++i)
         {
@@ -537,9 +545,10 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
         const int blackW = 48;
         const int blackH = 88;
 
-        int whiteIdx[] = { 0, 2, 4, 5, 7, 9, 11 };
-        int blackIdx[] = { 1, 3, 6, 8, 10 };
+        const int whiteIdx[] = { 0, 2, 4, 5, 7, 9, 11 };
+        const int blackIdx[] = { 1, 3, 6, 8, 10 };
 
+        // Draw white keys
         for (int i = 0; i < 7; ++i)
         {
             int noteIdx = whiteIdx[i];
@@ -547,18 +556,16 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
             bool inScale = noteInScale[noteIdx];
 
             if (inScale)
-            {
                 g.setColour(Palette::accentBright.withAlpha(0.28f));
-            }
             else
-            {
                 g.setColour(Palette::bgDark.withAlpha(0.55f));
-            }
+
             g.fillRoundedRectangle(static_cast<float>(x), static_cast<float>(pianoY),
                                    static_cast<float>(whiteW), static_cast<float>(whiteH), 3.0f);
         }
 
-        int blackPositions[] = { 0, 1, 3, 4, 5 };
+        // Draw black keys
+        const int blackPositions[] = { 0, 1, 3, 4, 5 };
         for (int i = 0; i < 5; ++i)
         {
             int noteIdx = blackIdx[i];
@@ -566,13 +573,10 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
             bool inScale = noteInScale[noteIdx];
 
             if (inScale)
-            {
                 g.setColour(Palette::accentBright.withAlpha(0.45f));
-            }
             else
-            {
                 g.setColour(Palette::bgDark.withAlpha(0.72f));
-            }
+
             g.fillRoundedRectangle(static_cast<float>(xOff), static_cast<float>(pianoY),
                                    static_cast<float>(blackW), static_cast<float>(blackH), 2.0f);
         }
@@ -622,8 +626,8 @@ void HumHouseVocalTuneEditor::resized()
     const int blackW = 48;
     const int blackH = 88;
 
-    int whiteIdx[] = { 0, 2, 4, 5, 7, 9, 11 };
-    int blackIdx[] = { 1, 3, 6, 8, 10 };
+    const int whiteIdx[] = { 0, 2, 4, 5, 7, 9, 11 };
+    const int blackIdx[] = { 1, 3, 6, 8, 10 };
 
     for (int i = 0; i < 7; ++i)
     {
@@ -631,7 +635,7 @@ void HumHouseVocalTuneEditor::resized()
         btn.setBounds(pianoX + i * (whiteW + 2), pianoY, whiteW, whiteH);
     }
 
-    int blackPositions[] = { 0, 1, 3, 4, 5 };
+    const int blackPositions[] = { 0, 1, 3, 4, 5 };
     for (int i = 0; i < 5; ++i)
     {
         auto& btn = noteButtons[static_cast<size_t>(blackIdx[i])];
