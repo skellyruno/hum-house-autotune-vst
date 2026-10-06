@@ -14,13 +14,10 @@ namespace humtune
 //   - YIN pitch detection
 //   - Scale-aware pitch quantization with configurable snap
 //   - Note sustain / hold logic
-//   - Resampling-based pitch shifting (one shifter per channel)
-//   - Smoothed retune speed with low-pass envelope
-//   - Per-sample pitch glide for natural-sounding tuning
+//   - Pitch shifting with smoothing and pass-through bypass
 class AutoTuneEngine
 {
 public:
-    // Scale bitmasks: 12 bools for C..B
     static constexpr std::array<bool, 12> kMajor     = {true,false,true,false,true,true,false,true,false,true,false,true};
     static constexpr std::array<bool, 12> kMinor     = {true,false,true,true,false,true,false,true,true,false,true,false};
     static constexpr std::array<bool, 12> kChromatic = {true,true,true,true,true,true,true,true,true,true,true,true};
@@ -32,6 +29,7 @@ public:
     {
         sr = sampleRate;
         detector.prepare(sampleRate, blockSize);
+
         for (auto& s : shifters)
             s.prepare(sampleRate, blockSize);
 
@@ -46,7 +44,6 @@ public:
     int   getLatencySamples() const { return latencySamples; }
     float getMinFrequency()   const { return detector.getMinFrequency(); }
 
-    // ---- Parameter setters ----
     void setRootNote        (int note)    { rootNote = note % 12; }
     void setScaleType       (int type)    { scaleType = type; }
     void setRetuneSpeed     (float spd)   { retuneSpeed = spd; }
@@ -70,7 +67,6 @@ public:
     void setCustomScale     (const std::array<bool, 12>& s) { customScale = s; useCustom = true; }
     void clearCustomScale   ()            { useCustom = false; }
 
-    // ---- Readbacks for UI ----
     float getDetectedHz()       const { return lastDetectedHz; }
     float getTargetHz()         const { return lastTargetHz; }
     float getCorrectionCents()  const { return lastCorrectionCents; }
@@ -78,7 +74,6 @@ public:
     int   getDetectedMidiNote() const { return lastDetectedMidi; }
     int   getTargetMidiNote()   const { return lastTargetMidi; }
 
-    // Delay a (dry) buffer by exactly the same amount as process() delays audio.
     void delayDry (juce::AudioBuffer<float>& buffer)
     {
         const int n   = buffer.getNumSamples();
@@ -129,108 +124,95 @@ public:
             smoothedCorrectionCents = 0.0;
             lockedMidiNote = -1;
             holdCounter = 0;
+
+            const int nch = std::min(numChannels, kMaxChannels);
+            for (int ch = 0; ch < nch; ++ch)
+            {
+                shifters[static_cast<size_t>(ch)].setFormantPreserve(formantPreserve);
+                shifters[static_cast<size_t>(ch)].process(buffer.getWritePointer(ch), numSamples,
+                                                          periodSamples, 1.0f);
+            }
+            return;
+        }
+
+        detector.feedSamples(buffer.getReadPointer(0), numSamples);
+        const float detectedHz = detector.detectPitch();
+        lastDetectedHz = detectedHz;
+
+        const bool voiced = detectedHz >= detector.getMinFrequency()
+                         && detectedHz <= PitchDetector::kMaxHz
+                         && detector.getConfidence() >= 0.3f;
+
+        if (!voiced)
+        {
+            lastTargetHz = detectedHz;
+            lastCorrectionCents = 0.0f;
+            lastDetectedMidi = -1;
+            lastTargetMidi = -1;
+
+            smoothedCorrectionCents *= 0.95;
+            lockedMidiNote = -1;
+            holdCounter = 0;
         }
         else
         {
-            // --- Pitch detection (mono, channel 0) ---
-            detector.feedSamples(buffer.getReadPointer(0), numSamples);
-            const float detectedHz = detector.detectPitch();
-            lastDetectedHz = detectedHz;
+            const float midiNote = 69.0f + 12.0f * std::log2(detectedHz / referenceFreq);
+            lastDetectedMidi = static_cast<int>(std::round(midiNote));
 
-            const bool voiced = detectedHz >= detector.getMinFrequency()
-                             && detectedHz <= PitchDetector::kMaxHz
-                             && detector.getConfidence() >= 0.3f;
+            int targetMidi = quantizeToScale(midiNote);
 
-            if (!voiced)
+            if (noteStabilizer && lockedMidiNote >= 0)
             {
-                lastTargetHz = detectedHz;
-                lastCorrectionCents = 0.0f;
-                lastDetectedMidi = -1;
-                lastTargetMidi = -1;
+                const float lockedHz = referenceFreq * std::pow(2.0f, (static_cast<float>(lockedMidiNote) - 69.0f) / 12.0f);
+                const float centsDiff = std::abs(1200.0f * std::log2(detectedHz / lockedHz));
 
-                smoothedCorrectionCents *= 0.95;
-                lockedMidiNote = -1;
-                holdCounter = 0;
+                if (centsDiff < sustainCents)
+                {
+                    targetMidi = lockedMidiNote;
+                    holdCounter++;
+                }
+                else
+                {
+                    holdCounter = 0;
+                    lockedMidiNote = targetMidi;
+                }
             }
             else
             {
-                // --- Note quantization ---
-                const float midiNote = 69.0f + 12.0f * std::log2(detectedHz / referenceFreq);
-                lastDetectedMidi = static_cast<int>(std::round(midiNote));
-
-                int targetMidi = quantizeToScale(midiNote);
-
-                // Note stabilizer: stay on the locked note while the voice is within sustainCents of it
-                if (noteStabilizer && lockedMidiNote >= 0)
-                {
-                    const float lockedHz = referenceFreq * std::pow(2.0f, (static_cast<float>(lockedMidiNote) - 69.0f) / 12.0f);
-                    const float centsDiff = std::abs(1200.0f * std::log2(detectedHz / lockedHz));
-
-                    if (centsDiff < sustainCents)
-                    {
-                        targetMidi = lockedMidiNote;
-                        holdCounter++;
-                    }
-                    else
-                    {
-                        holdCounter = 0;
-                        lockedMidiNote = targetMidi;
-                    }
-                }
-                else
-                {
-                    lockedMidiNote = targetMidi;
-                }
-
-                lastTargetMidi = targetMidi;
-                const float targetHz = referenceFreq * std::pow(2.0f, (static_cast<float>(targetMidi) - 69.0f) / 12.0f);
-                lastTargetHz = targetHz;
-
-                // --- Correction calculation ---
-                float correctionCents = 1200.0f * std::log2(targetHz / detectedHz);
-                lastCorrectionCents = correctionCents;
-
-                correctionCents *= amount;               // correction depth
-                correctionCents *= (1.0f - humanize);    // humanize reduces harshness
-
-                // --- Professional-grade retune speed smoothing ---
-                // This creates a smooth exponential envelope that feels natural
-                double timeConstant;
-                if (retuneSpeed < 0.01f)
-                {
-                    timeConstant = 0.00008;              // nearly instant (super snappy, like T-Pain)
-                }
-                else if (retuneSpeed < 0.1f)
-                {
-                    timeConstant = 0.0003 + static_cast<double>(retuneSpeed) * 0.0005;
-                }
-                else if (retuneSpeed < 0.5f)
-                {
-                    timeConstant = 0.0005 + static_cast<double>(retuneSpeed) * 0.05;
-                }
-                else
-                {
-                    // Slow mode for gentle, natural correction
-                    timeConstant = 0.02 + static_cast<double>(retuneSpeed) * 0.08;
-                }
-
-                // Apply exponential smoothing per block (one-pole low-pass filter)
-                const double coeff = std::exp(-static_cast<double>(numSamples) / (sr * timeConstant));
-                smoothedCorrectionCents = smoothedCorrectionCents * coeff
-                                        + static_cast<double>(correctionCents) * (1.0 - coeff);
-
-                shiftRatio = std::pow(2.0f, static_cast<float>(smoothedCorrectionCents) / 1200.0f);
-
-                // Kill the shift if it's nearly unity (avoid tiny artifacts)
-                if (std::abs(shiftRatio - 1.0f) < 0.0008f)
-                    shiftRatio = 1.0f;
-
-                periodSamples = static_cast<float>(sr) / detectedHz;
+                lockedMidiNote = targetMidi;
             }
+
+            lastTargetMidi = targetMidi;
+            const float targetHz = referenceFreq * std::pow(2.0f, (static_cast<float>(targetMidi) - 69.0f) / 12.0f);
+            lastTargetHz = targetHz;
+
+            float correctionCents = 1200.0f * std::log2(targetHz / detectedHz);
+            lastCorrectionCents = correctionCents;
+
+            correctionCents *= amount;
+            correctionCents *= (1.0f - humanize);
+
+            double timeConstant;
+            if (retuneSpeed < 0.01f)
+                timeConstant = 0.0001;
+            else
+                timeConstant = 0.0005 + static_cast<double>(retuneSpeed) * 0.15;
+
+            const double coeff = std::exp(-static_cast<double>(numSamples) / (sr * timeConstant));
+            smoothedCorrectionCents = smoothedCorrectionCents * coeff
+                                    + static_cast<double>(correctionCents) * (1.0 - coeff);
+
+            shiftRatio = std::pow(2.0f, static_cast<float>(smoothedCorrectionCents) / 1200.0f);
+
+            if (std::abs(shiftRatio - 1.0f) < 0.0008f)
+                shiftRatio = 1.0f;
+
+            // clamp to sane range
+            shiftRatio = juce::jlimit(0.9f, 1.1f, shiftRatio);
+
+            periodSamples = static_cast<float>(sr) / detectedHz;
         }
 
-        // --- Process audio through the pitch shifter ---
-        // The shifter always runs to maintain constant latency
         const int nch = std::min(numChannels, kMaxChannels);
         for (int ch = 0; ch < nch; ++ch)
         {
@@ -241,7 +223,6 @@ public:
     }
 
 private:
-    // Re-configures detector, shifters and dry delay for the current latency mode.
     void applyLatencyMode()
     {
         const float minHz = lowLatency ? kLowLatencyMinHz : PitchDetector::kMinHz;
@@ -277,7 +258,6 @@ private:
         if (scale[static_cast<size_t>(noteInOctave)])
             return nearest;
 
-        // Search outward for the nearest in-scale note
         for (int offset = 1; offset <= 6; ++offset)
         {
             const int up   = (noteInOctave + offset) % 12;
@@ -302,7 +282,6 @@ private:
     PitchDetector detector;
     std::array<PitchShifter, kMaxChannels> shifters;
 
-    // Parameters
     int   rootNote       = 0;
     int   scaleType      = 0;
     float retuneSpeed    = 0.0f;
@@ -318,17 +297,14 @@ private:
     bool  useCustom      = false;
     std::array<bool, 12> customScale = kChromatic;
 
-    // State
     double smoothedCorrectionCents = 0.0;
     int    lockedMidiNote = -1;
     int    holdCounter    = 0;
     int    latencySamples = 0;
 
-    // Dry delay lines (latency compensation for the dry/wet mix)
     std::array<std::vector<float>, kMaxChannels> dryLine;
     int dryPos = 0;
 
-    // Readbacks
     float lastDetectedHz      = 0.0f;
     float lastTargetHz        = 0.0f;
     float lastCorrectionCents = 0.0f;
