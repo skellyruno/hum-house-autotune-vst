@@ -15,26 +15,30 @@ public:
     static constexpr double kMinHz = 80.0;
     static constexpr double kMaxHz = 1500.0;
 
-    void prepare (double sampleRate, int blockSize)
+    void prepare (double sampleRate, int /*blockSize*/)
     {
         sr = sampleRate;
-        latency = std::max(512, static_cast<int>(std::ceil(sr * 0.01)));
-        
-        ringSize = nextPow2(latency * 4 + blockSize * 8);
-        inBuffer.assign(static_cast<size_t>(ringSize), 0.0f);
-        outBuffer.assign(static_cast<size_t>(ringSize), 0.0f);
-        
+
+        const int maxPeriodAlloc = std::max(32, static_cast<int>(std::ceil(sr / kMinHz)));
+        const int latencyAlloc   = static_cast<int>(std::ceil(2.5 * maxPeriodAlloc)) + 8;
+
+        inSize  = nextPow2(latencyAlloc + 4 * maxPeriodAlloc + 2 * kChunk);
+        outSize = nextPow2(2 * latencyAlloc + 10 * maxPeriodAlloc + 4 * kChunk);
+        inMask  = static_cast<int64_t>(inSize - 1);
+        outMask = static_cast<int64_t>(outSize - 1);
+
+        inRing.assign(static_cast<size_t>(inSize), 0.0f);
+        outRing.assign(static_cast<size_t>(outSize), 0.0f);
+
         minPeriod = std::max(4, static_cast<int>(std::floor(sr / kMaxHz)));
-        maxPeriod = std::max(32, static_cast<int>(std::ceil(sr / kMinHz)));
-        
-        reset();
+        setMinFrequency(kMinHz);
     }
 
     void setMinFrequency (double hz)
     {
-        hz = juce::jlimit(kMinHz, 400.0, hz);
-        minHz = hz;
+        hz        = juce::jlimit(kMinHz, 400.0, hz);
         maxPeriod = std::max(32, static_cast<int>(std::ceil(sr / hz)));
+        latency   = static_cast<int>(std::ceil(2.5 * maxPeriod)) + 8;
         reset();
     }
 
@@ -42,78 +46,36 @@ public:
 
     void reset()
     {
-        std::fill(inBuffer.begin(), inBuffer.end(), 0.0f);
-        std::fill(outBuffer.begin(), outBuffer.end(), 0.0f);
-        inPos = 0;
-        outPos = 0;
-        lastPeriod = sr / 200.0;
+        std::fill(inRing.begin(), inRing.end(), 0.0f);
+        std::fill(outRing.begin(), outRing.end(), 0.0f);
+        inCount  = 0;
+        outRead  = 0;
+        nextTs   = 0.0;
+        markPos  = -static_cast<double>(latency);
+        lastPeriod = juce::jlimit(static_cast<double>(minPeriod),
+                                  static_cast<double>(maxPeriod), sr / 200.0);
     }
 
     int getLatencySamples() const { return latency; }
 
     void process (float* data, int numSamples, float periodSamples, float shiftRatio)
     {
-        if (numSamples <= 0 || inBuffer.empty())
+        if (numSamples <= 0 || inRing.empty())
             return;
 
         double periodF = lastPeriod;
         if (std::isfinite(periodSamples) && periodSamples >= static_cast<float>(minPeriod))
             periodF = static_cast<double>(periodSamples);
-        
         periodF = juce::jlimit(static_cast<double>(minPeriod),
-                               static_cast<double>(maxPeriod),
-                               periodF);
+                               static_cast<double>(maxPeriod), periodF);
         lastPeriod = periodF;
 
         const double ratio = std::isfinite(shiftRatio)
-                           ? juce::jlimit(0.9, 1.1, static_cast<double>(shiftRatio))
+                           ? juce::jlimit(0.5, 2.0, static_cast<double>(shiftRatio))
                            : 1.0;
 
-        // If ratio is unity, just pass through with delay
-        if (std::abs(ratio - 1.0) < 0.0001)
-        {
-            for (int i = 0; i < numSamples; ++i)
-            {
-                inBuffer[static_cast<size_t>(inPos)] = data[i];
-                inPos = (inPos + 1) % ringSize;
-                
-                int readPos = (inPos - latency + ringSize) % ringSize;
-                data[i] = inBuffer[static_cast<size_t>(readPos)];
-            }
-            return;
-        }
-
-        // Simple time-stretch: read at a variable rate determined by ratio
-        for (int i = 0; i < numSamples; ++i)
-        {
-            inBuffer[static_cast<size_t>(inPos)] = data[i];
-            inPos = (inPos + 1) % ringSize;
-
-            // Calculate read position: we want to read at a rate that produces the pitch shift
-            int readIdx = (inPos - latency + ringSize) % ringSize;
-            
-            // The magic: if ratio > 1.0, we read faster through the buffer (pitch up)
-            // if ratio < 1.0, we read slower (pitch down)
-            // This is done by advancing readPos at rate = 1/ratio
-            readPos += 1.0 / ratio;
-            
-            // Wrap around
-            while (readPos >= static_cast<double>(ringSize))
-                readPos -= static_cast<double>(ringSize);
-            while (readPos < 0.0)
-                readPos += static_cast<double>(ringSize);
-
-            // Cubic interpolation for smooth resampling
-            int idx = static_cast<int>(readPos);
-            double frac = readPos - std::floor(readPos);
-            
-            float s0 = inBuffer[static_cast<size_t>((idx - 1 + ringSize) % ringSize)];
-            float s1 = inBuffer[static_cast<size_t>(idx)];
-            float s2 = inBuffer[static_cast<size_t>((idx + 1) % ringSize)];
-            float s3 = inBuffer[static_cast<size_t>((idx + 2) % ringSize)];
-            
-            data[i] = cubicHermite(s0, s1, s2, s3, static_cast<float>(frac));
-        }
+        for (int pos = 0; pos < numSamples; pos += kChunk)
+            processChunk(data + pos, std::min(kChunk, numSamples - pos), periodF, ratio);
     }
 
     bool isNearUnity (float ratio) const
@@ -122,6 +84,8 @@ public:
     }
 
 private:
+    static constexpr int kChunk = 256;
+
     static int nextPow2 (int v)
     {
         int p = 1;
@@ -129,32 +93,87 @@ private:
         return p;
     }
 
-    static float cubicHermite(float y0, float y1, float y2, float y3, float t)
+    void processChunk (float* data, int m, double periodF, double ratio)
     {
-        float t2 = t * t;
-        float t3 = t2 * t;
+        for (int i = 0; i < m; ++i)
+            inRing[static_cast<size_t>((inCount + i) & inMask)] = data[i];
+        inCount += m;
 
-        float c0 = y1;
-        float c1 = 0.5f * (y2 - y0);
-        float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-        float c3 = 1.5f * (y1 - y2) + 0.5f * (y3 - y0);
+        const double hop = periodF / ratio;
 
-        return c0 + c1 * t + c2 * t2 + c3 * t3;
+        double halfWin = formantPreserve ? periodF : periodF / ratio;
+        halfWin = std::min(halfWin, static_cast<double>(latency) - 1.5 * periodF - 8.0);
+        halfWin = std::max(halfWin, 0.5 * periodF);
+        const double rate = periodF / halfWin;
+        const float  gain = static_cast<float>(hop / halfWin);
+        const float  piOverW = juce::MathConstants<float>::pi / static_cast<float>(halfWin);
+
+        for (;;)
+        {
+            const double ta0 = nextTs - static_cast<double>(latency);
+
+            while (markPos + 0.5 * periodF < ta0)
+                markPos += periodF;
+
+            if (static_cast<int64_t>(std::floor(markPos + periodF)) + 3 >= inCount)
+                break;
+
+            const int64_t oFirst = static_cast<int64_t>(std::ceil (nextTs - halfWin));
+            const int64_t oLast  = static_cast<int64_t>(std::floor(nextTs + halfWin));
+
+            for (int64_t o = std::max(oFirst, outRead); o <= oLast; ++o)
+            {
+                const float x = static_cast<float>(static_cast<double>(o) - nextTs + halfWin);
+                if (x <= 0.0f)
+                    continue;
+                const float w = 0.5f * (1.0f - std::cos(piOverW * x));
+
+                const double  pos = markPos + (static_cast<double>(o) - nextTs) * rate;
+                const double  fl  = std::floor(pos);
+                const int64_t a   = static_cast<int64_t>(fl);
+                if (a < 1)
+                    continue;
+
+                const float t  = static_cast<float>(pos - fl);
+                const float t2 = t * t, t3 = t2 * t;
+                const float c0 = -0.5f * t3 + t2 - 0.5f * t;
+                const float c1 =  1.5f * t3 - 2.5f * t2 + 1.0f;
+                const float c2 = -1.5f * t3 + 2.0f * t2 + 0.5f * t;
+                const float c3 =  0.5f * t3 - 0.5f * t2;
+
+                const float s = c0 * inRing[static_cast<size_t>((a - 1) & inMask)]
+                              + c1 * inRing[static_cast<size_t>( a      & inMask)]
+                              + c2 * inRing[static_cast<size_t>((a + 1) & inMask)]
+                              + c3 * inRing[static_cast<size_t>((a + 2) & inMask)];
+
+                outRing[static_cast<size_t>(o & outMask)] += s * w * gain;
+            }
+
+            nextTs += hop;
+        }
+
+        for (int i = 0; i < m; ++i)
+        {
+            const size_t idx = static_cast<size_t>((outRead + i) & outMask);
+            data[i] = outRing[idx];
+            outRing[idx] = 0.0f;
+        }
+        outRead += m;
     }
 
     double sr = 44100.0;
-    int minPeriod = 32;
-    int maxPeriod = 800;
-    int latency = 512;
-    int ringSize = 4096;
-    int inPos = 0;
-    double readPos = 0.0;
-    double outPos = 0.0;
-    double lastPeriod = 220.0;
-    double minHz = kMinHz;
+    int maxPeriod = 800, minPeriod = 32, latency = 2000;
+    int inSize = 0, outSize = 0;
+    int64_t inMask = 0, outMask = 0;
 
-    std::vector<float> inBuffer, outBuffer;
-    bool formantPreserve = true;
+    std::vector<float> inRing, outRing;
+
+    int64_t inCount = 0;
+    int64_t outRead = 0;
+    double  nextTs  = 0.0;
+    double  markPos = 0.0;
+    double  lastPeriod = 220.0;
+    bool    formantPreserve = true;
 };
 
 } // namespace humtune
