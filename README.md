@@ -1,4 +1,4 @@
-# HumHouse Vocal Tune
+# SkellyTune
 
 Dedicated pitch correction (autotune) plugin built with
 [JUCE](https://juce.com). Thick vocal sustain, sharp note snapping,
@@ -31,84 +31,13 @@ Ships as:
 | **12 Presets** | Hard Snap, Sharp Correct, Natural, R&B Smooth, Trap Vocal, Gospel, and more |
 | **Purple UI** | HumHouse signature dark purple aesthetic inspired by MetaTune |
 
-## Signal Flow
 
-```
-Input → Input Gain → YIN Pitch Detection → Scale Quantization
-     → Note Sustain/Hold → Retune Speed Smoothing
-     → TD-PSOLA Pitch Shift → Dry/Wet Mix → Output Gain → Output
-```
-
-## Downloadable Binaries
-
-Binaries are produced by the GitHub Actions workflow on every push and release:
-
-| Platform | Formats | Asset |
-|----------|---------|-------|
-| macOS | Universal `.vst3` + `.component` (AU) + `.app`, guided `.pkg` installer with EULA | `HumHouse-VocalTune-macOS.dmg` / `.pkg` |
-| Windows | `.vst3` + Standalone `.exe`, Inno Setup installer with EULA | `HumHouse-VocalTune-Windows-x64.zip` |
-| Linux | `.vst3` + Standalone | `HumHouse-VocalTune-Linux-x86_64.zip` |
-
-### Windows Installer
-
-The Inno Setup installer (`installer/humhouse-vocal-tune.iss`) presents a
-EULA agreement and installs:
-- VST3 to `C:\Program Files\Common Files\VST3\`
-- Standalone to `C:\Program Files\HumHouse\HumHouse Vocal Tune\`
-
-### macOS Installer
-
-The `.pkg` installer presents a welcome screen and EULA, then installs:
-- VST3 to `/Library/Audio/Plug-Ins/VST3/`
-- AU to `/Library/Audio/Plug-Ins/Components/`
-- Standalone to `/Applications/`
-
-## Layout
-
-```
-.
-├── CMakeLists.txt                  # Top-level CMake; fetches JUCE via FetchContent
-├── Source/
-│   ├── PluginProcessor.{h,cpp}     # APVTS, parameter routing, dry/wet mix
-│   ├── PluginEditor.{h,cpp}        # MetaTune-style purple GUI with orb visualizer
-│   ├── HumHouseLookAndFeel.h       # Purple/dark theme colours, knob rendering
-│   ├── AutoTuneEngine.h            # Combines detection + quantization + shifting
-│   ├── PitchDetector.h             # YIN pitch detection with CMND + median filter
-│   └── PitchShifter.h              # Period-synchronous TD-PSOLA pitch shifting
-├── installer/
-│   ├── humhouse-vocal-tune.iss     # Inno Setup script (Windows)
-│   └── eula.txt                    # End-User License Agreement
-├── scripts/
-│   ├── package_macos_dmg.sh        # Build .dmg (drag-to-install)
-│   └── package_macos_pkg.sh        # Build guided .pkg installer
-└── .github/workflows/build.yml     # CI/CD: build + package for all platforms
-```
-
-## Building from Source
-
-```bash
-# macOS (universal)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-cmake --build build --config Release -j
-
-# Windows (Visual Studio)
-cmake -S . -B build -A x64
-cmake --build build --config Release -j
-
-# Linux
-sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
-     libxinerama-dev libxcursor-dev libfreetype6-dev libfontconfig1-dev \
-     libgl1-mesa-dev libxrender-dev libxcomposite-dev libxext-dev
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -j
-```
 
 ## Technical Design
 
 ### Why TD-PSOLA?
 
-Previous implementations in the HumHouse vocal suite used fixed-size
+Previous implementations used fixed-size
 grains (256 samples) for pitch shifting, which caused:
 - Phase discontinuities at grain boundaries
 - Metallic / robotic artifacts
