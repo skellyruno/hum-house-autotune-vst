@@ -41,7 +41,7 @@ public:
         cmndBuf.assign(static_cast<size_t>(allocTau + 2), 0.0f);
 
         minTau  = std::max(2, static_cast<int>(std::floor(sr / kMaxHz)));
-        hopSize = std::max(32, static_cast<int>(sr / 150.0));
+        hopSize = std::max(32, static_cast<int>(sr / 250.0));
 
         setMinFrequency(kMinHz);
     }
@@ -70,6 +70,9 @@ public:
     }
 
     float getMinFrequency() const { return minHz; }
+
+    // Detection runs once every hopSize samples (about 4 ms)
+    int getHopSize() const { return hopSize; }
 
     // Feed samples into the ring buffer.
     void feedSamples (const float* data, int numSamples)
@@ -106,20 +109,24 @@ public:
         if (writePos > 0)
             std::memcpy(lin.data() + tail, ring.data(), static_cast<size_t>(writePos) * sizeof(float));
 
+        // The analysis uses the NEWEST `integLen` samples (b) and the same number
+        // of samples one lag earlier (a), so the result describes "now", not the past.
+        const int newest = bufLen - integLen;
+
         // Silence gate (about -70 dB): nothing to detect
         {
             float energy = 0.0f;
             for (int j = 0; j < integLen; ++j)
-                energy += lin[static_cast<size_t>(j)] * lin[static_cast<size_t>(j)];
+                energy += lin[static_cast<size_t>(newest + j)] * lin[static_cast<size_t>(newest + j)];
             if (energy < static_cast<float>(integLen) * 1.0e-7f)
                 return setUnvoiced();
         }
 
         // Step 1: difference function
-        const float* a = lin.data();
         for (int tau = 1; tau <= maxTau; ++tau)
         {
-            const float* b = a + tau;
+            const float* a = lin.data() + (newest - tau);
+            const float* b = lin.data() + newest;
             float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
             int j = 0;
             for (; j + 4 <= integLen; j += 4)
@@ -218,7 +225,7 @@ public:
     void setThreshold (float t) { yinThreshold = t; }
 
 private:
-    static constexpr int kMedianSize = 5;
+    static constexpr int kMedianSize = 3;
 
     float setUnvoiced()
     {
