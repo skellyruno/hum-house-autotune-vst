@@ -13,112 +13,30 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS (VST3 + AU, universal .dmg + .pkg)
-            os: macos-14
-            artifact: HumHouse-VocalTune-macOS
-          - name: Windows (VST3 + Installer)
-            os: windows-2022
-            artifact: HumHouse-VocalTune-Windows-x64
-          - name: Linux (VST3)
-            os: ubuntu-22.04
-            artifact: HumHouse-VocalTune-Linux-x86_64
+    name: Windows (VST3 + Standalone)
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
-            libxcursor-dev libfreetype6-dev libfontconfig1-dev \
-            libgl1-mesa-dev libxrender-dev libxcomposite-dev libxext-dev
-
-      - name: Configure (macOS, universal)
-        if: runner.os == 'macOS'
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-                -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
+      - name: Configure
         run: cmake -S . -B build -A x64
 
       - name: Build
         run: cmake --build build --config Release -j
 
-      # ---------- macOS packaging ----------
-      - name: Package .dmg (macOS)
-        if: runner.os == 'macOS'
-        env:
-          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-          DMG_OUT: HumHouse-VocalTune-macOS.dmg
-        run: |
-          chmod +x scripts/package_macos_dmg.sh
-          ./scripts/package_macos_dmg.sh
-          mkdir -p artifacts
-          mv "$DMG_OUT" artifacts/
-
-      - name: Package .pkg installer (macOS)
-        if: runner.os == 'macOS'
-        env:
-          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-          APPLE_INSTALLER_ID: ${{ secrets.APPLE_INSTALLER_ID }}
-          PKG_OUT: HumHouse-VocalTune-macOS.pkg
-        run: |
-          chmod +x scripts/package_macos_pkg.sh
-          ./scripts/package_macos_pkg.sh
-          mv "$PKG_OUT" artifacts/
-
-      - name: Upload macOS artifacts
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: artifacts/*
-
-      # ---------- Windows packaging ----------
       - name: Package Windows zip
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts
-          $vst3 = "build\HumHouseVocalTune_artefacts\Release\VST3\HumHouse Vocal Tune.vst3"
-          $standalone = "build\HumHouseVocalTune_artefacts\Release\Standalone\HumHouse Vocal Tune.exe"
-          Compress-Archive -Path $vst3,$standalone -DestinationPath "artifacts\HumHouse-VocalTune-Windows-x64.zip"
+          $vst3 = "build\HumHouseVocalTune_artefacts\Release\VST3\SkellyTune.vst3"
+          $standalone = "build\HumHouseVocalTune_artefacts\Release\Standalone\SkellyTune.exe"
+          Compress-Archive -Path $vst3,$standalone -DestinationPath "artifacts\SkellyTune-Windows-x64.zip"
 
       - name: Upload Windows artifacts
-        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: artifacts/*
-
-      # ---------- Linux packaging ----------
-      - name: Package Linux zip
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p artifacts
-          cd build/HumHouseVocalTune_artefacts/Release
-          zip -r ../../../artifacts/HumHouse-VocalTune-Linux-x86_64.zip VST3/ Standalone/
-
-      - name: Upload Linux artifacts
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
+          name: SkellyTune-Windows-x64
           path: artifacts/*
 
       # ---------- Release assets ----------
