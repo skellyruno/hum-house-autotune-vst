@@ -4,15 +4,15 @@
 #include "PluginProcessor.h"
 #include <JuceHeader.h>
 
-// MetaTune-style GUI for HumHouse Vocal Tune.
+// SkellyTune interface.
 //
 // Layout (top to bottom):
-//   - Top bar: logo, preset selector, bypass
-//   - Pitch orb visualizer (centre) + Speed/Sustain/Amount knobs (right)
-//   - Mode buttons: Note, Major Hold, Minor Hold | Sustain: None/Short/Mid/Long
-//   - Input/Output meters + Tone volume
-//   - Piano keyboard (12 notes) with per-note on/off
-//   - Bottom bar: scale selector, pitch reference
+//   - Top bar: logo, title, Enabled switch
+//   - Radar visualizer with the skull (centre), skeleton arms on either side,
+//     In/Out gain (left), Retune Speed + Humanize + Mix (right)
+//   - Scale buttons, Note Stabilizer / Formant / Low Latency switches, Key
+//   - Pitch heatmap + piano keyboard (12 notes, each on/off)
+//   - Side panel: level meters, pitch readouts, pitch reference
 
 class HumHouseVocalTuneEditor : public juce::AudioProcessorEditor,
                                 public juce::AudioProcessorParameter::Listener,
@@ -36,13 +36,13 @@ private:
     humtune::HumHouseLookAndFeel lnf;
 
     // Knobs
-    juce::Slider speedKnob, sustainKnob, amountKnob;
+    juce::Slider speedKnob;
     juce::Slider humanizeKnob, mixKnob;
     juce::Slider inputGainKnob, outputGainKnob;
     juce::Slider referenceFreqKnob;
 
     // Labels for knobs
-    juce::Label speedLabel, sustainLabel, amountLabel;
+    juce::Label speedLabel;
     juce::Label humanizeLabel, mixLabel;
     juce::Label inputGainLabel, outputGainLabel, referenceFreqLabel;
 
@@ -68,7 +68,7 @@ private:
     using ButtonAttach = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAttach  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
-    std::unique_ptr<SliderAttach> speedAtt, sustainAtt, amountAtt;
+    std::unique_ptr<SliderAttach> speedAtt;
     std::unique_ptr<SliderAttach> humanizeAtt, mixAtt;
     std::unique_ptr<SliderAttach> inputGainAtt, outputGainAtt, referenceFreqAtt;
     std::unique_ptr<ButtonAttach> stabilizerAtt, formantAtt, lowLatAtt, enableAtt;

@@ -18,7 +18,10 @@ public:
     static constexpr std::array<bool, 12> kChromatic = {true,true,true,true,true,true,true,true,true,true,true,true};
 
     static constexpr int kMaxChannels = 2;
-    static constexpr float kLowLatencyMinHz = 130.0f;
+    // Low Latency mode only tracks pitches above this. The delay of the shifter is about
+    // 2.5 periods of the LOWEST pitch it must handle, so a higher floor = less delay:
+    //   80 Hz (normal) -> ~31 ms,   200 Hz (low latency) -> ~13 ms   (at 48 kHz)
+    static constexpr float kLowLatencyMinHz = 200.0f;     // about G3
 
     void prepare (double sampleRate, int blockSize)
     {
@@ -310,9 +313,10 @@ private:
     int   rootNote       = 0;
     int   scaleType      = 0;
     float retuneSpeed    = 0.0f;
-    float amount         = 1.0f;
+    float amount         = 1.0f;     // full correction (the Amount knob was removed)
     float humanize       = 0.0f;
-    float sustainCents   = 50.0f;
+    float sustainCents   = 60.0f;     // Note Stabilizer: small hysteresis so vibrato near a
+                                      // note boundary does not make the target flip (the Sustain knob was removed)
     bool  noteStabilizer = true;
     bool  formantPreserve = true;
     float referenceFreq  = 440.0f;

@@ -13,19 +13,19 @@ HumHouseVocalTuneProcessor::getPresets()
 {
     static const std::vector<Preset> presets =
     {
-        // name,                   speed, amt, human, sustain, scale, stab,  formant, lowLat
-        { "Hard Snap (T-Pain)",    0.00f, 1.0f, 0.00f, 80.0f,  2,    true,  true,    false },
-        { "Sharp Correct",         0.05f, 1.0f, 0.00f, 60.0f,  0,    true,  true,    false },
-        { "Natural Correct",       0.25f, 0.8f, 0.15f, 50.0f,  0,    true,  true,    false },
-        { "Gentle Touch",          0.50f, 0.5f, 0.30f, 40.0f,  0,    true,  true,    false },
-        { "Subtle Polish",         0.70f, 0.3f, 0.40f, 30.0f,  0,    true,  true,    false },
-        { "Robotic",               0.00f, 1.0f, 0.00f, 100.0f, 2,    false, false,   false },
-        { "Live Performance",      0.15f, 0.9f, 0.10f, 50.0f,  0,    true,  true,    true  },
-        { "R&B Smooth",            0.10f, 0.9f, 0.05f, 70.0f,  1,    true,  true,    false },
-        { "Pop Vocal",             0.08f, 1.0f, 0.02f, 60.0f,  0,    true,  true,    false },
-        { "Trap Vocal",            0.00f, 1.0f, 0.00f, 90.0f,  1,    true,  true,    false },
-        { "Gospel Sustain",        0.20f, 0.85f, 0.10f, 80.0f, 0,    true,  true,    false },
-        { "Lo-Fi Drift",           0.60f, 0.4f, 0.50f, 20.0f,  2,    false, true,    false },
+        // name,                   speed, human, scale, stab,  formant, lowLat
+        { "Hard Snap (T-Pain)",    0.00f, 0.00f, 2,    true,  true,    false },
+        { "Sharp Correct",         0.05f, 0.00f, 0,    true,  true,    false },
+        { "Natural Correct",       0.25f, 0.15f, 0,    true,  true,    false },
+        { "Gentle Touch",          0.50f, 0.30f, 0,    true,  true,    false },
+        { "Subtle Polish",         0.70f, 0.40f, 0,    true,  true,    false },
+        { "Robotic",               0.00f, 0.00f, 2,    false, false,   false },
+        { "Live Performance",      0.15f, 0.10f, 0,    true,  true,    true  },
+        { "R&B Smooth",            0.10f, 0.05f, 1,    true,  true,    false },
+        { "Pop Vocal",             0.08f, 0.02f, 0,    true,  true,    false },
+        { "Trap Vocal",            0.00f, 0.00f, 1,    true,  true,    false },
+        { "Gospel Sustain",        0.20f, 0.10f, 0,    true,  true,    false },
+        { "Lo-Fi Drift",           0.60f, 0.50f, 2,    false, true,    false },
     };
     return presets;
 }
@@ -43,16 +43,8 @@ HumHouseVocalTuneProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.0f));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{"amount", 1}, "Correction Amount",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{"humanize", 1}, "Humanize",
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{"sustain", 1}, "Sustain (cents)",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f));
 
     params.push_back(std::make_unique<juce::AudioParameterInt>(
         juce::ParameterID{"rootNote", 1}, "Root Note", 0, 11, 0));
@@ -132,9 +124,7 @@ void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // Read parameters
     float speed     = *apvts.getRawParameterValue("speed");
-    float amt       = *apvts.getRawParameterValue("amount");
     float hum       = *apvts.getRawParameterValue("humanize");
-    float sus       = *apvts.getRawParameterValue("sustain");
     int   root      = static_cast<int>(*apvts.getRawParameterValue("rootNote"));
     int   scale     = static_cast<int>(*apvts.getRawParameterValue("scaleType"));
     float refFreq   = *apvts.getRawParameterValue("referenceFreq");
@@ -160,9 +150,7 @@ void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     engine.setRootNote(root);
     engine.setScaleType(scale);
     engine.setRetuneSpeed(speed);
-    engine.setAmount(amt);
     engine.setHumanize(hum);
-    engine.setSustain(sus);
     engine.setReferenceFreq(refFreq);
     engine.setNoteStabilizer(stab);
     engine.setFormantPreserve(formant);
@@ -253,9 +241,7 @@ void HumHouseVocalTuneProcessor::setCurrentProgram (int index)
     };
 
     set("speed",           p.speed);
-    set("amount",          p.amount);
     set("humanize",        p.humanize);
-    set("sustain",         p.sustain);
     set("scaleType",       static_cast<float>(p.scaleType));
     set("noteStabilizer",  p.stabilizer ? 1.0f : 0.0f);
     set("formantPreserve", p.formantPreserve ? 1.0f : 0.0f);

@@ -26,9 +26,8 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
 
     auto& apvts = proc.getAPVTS();
 
-    setupKnob(speedKnob,     speedLabel,     "Speed");
-    setupKnob(sustainKnob,   sustainLabel,   "Sustain");
-    setupKnob(amountKnob,    amountLabel,    "Amount");
+    setupKnob(speedKnob,     speedLabel,     "Retune Speed");
+    speedKnob.getProperties().set("displayScale", 100.0);   // show 0..1 as 0..100 (0 = fastest, 100 = slowest)
     setupKnob(humanizeKnob,  humanizeLabel,  "Humanize");
     setupKnob(mixKnob,       mixLabel,       "Mix");
     setupKnob(inputGainKnob, inputGainLabel, "In Gain");
@@ -38,8 +37,6 @@ HumHouseVocalTuneEditor::HumHouseVocalTuneEditor (HumHouseVocalTuneProcessor& p)
     referenceFreqKnob.setTextValueSuffix(" Hz");
 
     speedAtt     = std::make_unique<SliderAttach>(apvts, "speed",     speedKnob);
-    sustainAtt   = std::make_unique<SliderAttach>(apvts, "sustain",   sustainKnob);
-    amountAtt    = std::make_unique<SliderAttach>(apvts, "amount",    amountKnob);
     humanizeAtt  = std::make_unique<SliderAttach>(apvts, "humanize",  humanizeKnob);
     mixAtt       = std::make_unique<SliderAttach>(apvts, "mix",       mixKnob);
     inputGainAtt = std::make_unique<SliderAttach>(apvts, "inputGain", inputGainKnob);
@@ -227,12 +224,12 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
         g.setColour(Palette::accentBright);
         g.drawEllipse(logo, 1.5f);
         g.setFont(juce::Font(juce::FontOptions(13.0f).withStyle("Bold")));
-        g.drawText("HH", logo.toNearestInt(), juce::Justification::centred, false);
+        g.drawText("ST", logo.toNearestInt(), juce::Justification::centred, false);
     }
 
     {
         auto titleArea = topBar.withTrimmedLeft(60).withTrimmedRight(130);
-        const juce::String title = "HumHouse Vocal Tune";
+        const juce::String title = "SkellyTune";
         g.setFont(juce::Font(juce::FontOptions(24.0f).withStyle("Bold")));
 
         g.setColour(Palette::accent.withAlpha(0.12f));
@@ -257,9 +254,9 @@ void HumHouseVocalTuneEditor::paint (juce::Graphics& g)
     g.drawRoundedRectangle(mainPanel, 8.0f, 1.5f);
 
     g.setColour(Palette::bgSection.withAlpha(0.8f));
-    g.fillRoundedRectangle(11.0f, 56.0f, 66.0f, 298.0f, 6.0f);
+    g.fillRoundedRectangle(11.0f, 98.0f, 66.0f, 174.0f, 6.0f);
     g.setColour(Palette::accentDeep);
-    g.drawRoundedRectangle(11.0f, 56.0f, 66.0f, 298.0f, 6.0f, 1.0f);
+    g.drawRoundedRectangle(11.0f, 98.0f, 66.0f, 174.0f, 6.0f, 1.0f);
 
     g.setColour(Palette::bgSection.withAlpha(0.6f));
     g.fillRoundedRectangle(488.0f, 56.0f, 280.0f, 298.0f, 10.0f);
@@ -591,16 +588,16 @@ void HumHouseVocalTuneEditor::resized()
         l.setBounds(x - 6, y + size - 2, size + 12, 16);
     };
 
+    // Left column: input / output gain
     const int smKnob = 58;
     const int colX = 15;
-    place(humanizeKnob,   humanizeLabel,   colX,  60, smKnob);
-    place(mixKnob,        mixLabel,        colX, 132, smKnob);
-    place(inputGainKnob,  inputGainLabel,  colX, 204, smKnob);
-    place(outputGainKnob, outputGainLabel, colX, 276, smKnob);
+    place(inputGainKnob,  inputGainLabel,  colX, 106, smKnob);
+    place(outputGainKnob, outputGainLabel, colX, 186, smKnob);
 
-    place(speedKnob,   speedLabel,   500,  62, 128);
-    place(sustainKnob, sustainLabel, 650,  70,  98);
-    place(amountKnob,  amountLabel,  566, 206, 128);
+    // Right panel: big Retune Speed knob, with Humanize and Mix underneath
+    place(speedKnob,    speedLabel,    553,  62, 150);
+    place(humanizeKnob, humanizeLabel, 528, 246,  84);
+    place(mixKnob,      mixLabel,      644, 246,  84);
 
     const int rowY = 368;
     const int rowH = 28;

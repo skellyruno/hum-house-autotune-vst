@@ -78,9 +78,7 @@ private:
     {
         juce::String name;
         float speed;
-        float amount;
         float humanize;
-        float sustain;
         int   scaleType;
         bool  stabilizer;
         bool  formantPreserve;

@@ -148,8 +148,13 @@ public:
         g.setColour(Palette::textValue);
         g.setFont(juce::Font(juce::FontOptions(std::max(9.0f, radius * 0.30f))));
 
+        // A knob can ask to be shown on a different scale, e.g. 0..1 shown as 0..100
+        const double displayScale = static_cast<double>(slider.getProperties().getWithDefault("displayScale", 1.0));
+
         juce::String text;
-        if (slider.getTextValueSuffix().isNotEmpty())
+        if (displayScale != 1.0)
+            text = juce::String(juce::roundToInt(slider.getValue() * displayScale));
+        else if (slider.getTextValueSuffix().isNotEmpty())
             text = slider.getTextFromValue(slider.getValue());
         else
             text = juce::String(slider.getValue(), 1);
