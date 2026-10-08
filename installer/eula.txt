@@ -1,11 +1,11 @@
 END-USER LICENSE AGREEMENT (EULA)
-HumHouse Vocal Tune Plugin
+SkellyTune Plugin
 Copyright (c) 2024-2026 HumHouse. All Rights Reserved.
 
 IMPORTANT: READ THIS AGREEMENT CAREFULLY BEFORE INSTALLING OR USING
 THE SOFTWARE.
 
-By installing or using HumHouse Vocal Tune (the "Software"), you agree
+By installing or using SkellyTune (the "Software"), you agree
 to be bound by the terms of this End-User License Agreement ("EULA").
 If you do not agree to the terms of this EULA, do not install or use
 the Software.
