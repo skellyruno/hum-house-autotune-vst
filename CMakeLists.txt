@@ -44,11 +44,11 @@ endif()
 
 juce_add_plugin(HumHouseVocalTune
     COMPANY_NAME              "HumHouse"
-    BUNDLE_ID                 "com.humhouse.humhousevocaltune"
+    BUNDLE_ID                 "com.humhouse.skellytune"
     PLUGIN_MANUFACTURER_CODE  Humh
-    PLUGIN_CODE               Hhvt
+    PLUGIN_CODE               Sktn
     FORMATS                   ${HUMTUNE_FORMATS}
-    PRODUCT_NAME              "HumHouse Vocal Tune"
+    PRODUCT_NAME              "SkellyTune"
     IS_SYNTH                  FALSE
     NEEDS_MIDI_INPUT          FALSE
     NEEDS_MIDI_OUTPUT         FALSE
