@@ -5,7 +5,7 @@
 namespace humtune
 {
 
-// HumHouse neon-green / dark "skeleton tech" theme.
+// SkellyTune neon-green / dark "skeleton tech" theme.
 // All colours live here, so the editor only uses semantic names.
 // To recolour the whole plugin, change the accent* lines below.
 struct Palette
@@ -71,7 +71,16 @@ public:
         setColour(juce::PopupMenu::backgroundColourId,       Palette::bgPanel);
         setColour(juce::PopupMenu::textColourId,             Palette::textBright);
         setColour(juce::PopupMenu::highlightedBackgroundColourId, Palette::accentDim);
+        setColour(juce::PopupMenu::highlightedTextColourId,  Palette::textBright);
+        setColour(juce::TooltipWindow::backgroundColourId,   Palette::bgPanel);
+        setColour(juce::TooltipWindow::textColourId,         Palette::textBright);
+        setColour(juce::TooltipWindow::outlineColourId,      Palette::accentDim);
     }
+
+    // The editor tells us how big the interface currently is (1.0 = design size).
+    // Everything below that has a fixed size in pixels is multiplied by this.
+    void setScale (float newScale) { scale = juce::jmax(0.1f, newScale); }
+    float getScale() const         { return scale; }
 
     // 0 = normal button, 1 = white piano key, 2 = black piano key
     static int pianoKeyType (juce::Component& c)
@@ -88,22 +97,23 @@ public:
     {
         auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y),
                                               static_cast<float>(width), static_cast<float>(height));
-        const float radius = std::min(bounds.getWidth(), bounds.getHeight()) * 0.5f - 3.0f;
+        const float radius = std::min(bounds.getWidth(), bounds.getHeight()) * 0.5f - 3.0f * scale;
         const float cx = bounds.getCentreX();
         const float cy = bounds.getCentreY();
+        const bool  hot = slider.isMouseOverOrDragging();
 
         // Housing
         juce::ColourGradient housing(Palette::bgSection, cx, cy - radius,
                                       Palette::bgDeep,    cx, cy + radius, false);
         g.setGradientFill(housing);
         g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
-        g.setColour(Palette::accentDim);
-        g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.5f);
+        g.setColour(hot ? Palette::accent : Palette::accentDim);
+        g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.5f * scale);
 
         // Segmented ring
         const int   numTicks  = 36;
-        const float tickOuter = radius - 3.0f;
-        const float tickInner = tickOuter - std::max(4.0f, radius * 0.14f);
+        const float tickOuter = radius - 3.0f * scale;
+        const float tickInner = tickOuter - std::max(4.0f * scale, radius * 0.14f);
 
         for (int i = 0; i <= numTicks; ++i)
         {
@@ -118,14 +128,14 @@ public:
             if (t <= sliderPosProportional + 0.0001f)
             {
                 g.setColour(Palette::accent.withAlpha(0.25f));
-                g.drawLine(x1, y1, x2, y2, 4.5f);
+                g.drawLine(x1, y1, x2, y2, 4.5f * scale);
                 g.setColour(Palette::accentDim.interpolatedWith(Palette::accentBright, t));
-                g.drawLine(x1, y1, x2, y2, 2.2f);
+                g.drawLine(x1, y1, x2, y2, 2.2f * scale);
             }
             else
             {
                 g.setColour(Palette::accentDeep);
-                g.drawLine(x1, y1, x2, y2, 2.2f);
+                g.drawLine(x1, y1, x2, y2, 2.2f * scale);
             }
         }
 
@@ -136,19 +146,15 @@ public:
         g.setGradientFill(disc);
         g.fillEllipse(cx - inner, cy - inner, inner * 2.0f, inner * 2.0f);
         g.setColour(Palette::accentDeep);
-        g.drawEllipse(cx - inner, cy - inner, inner * 2.0f, inner * 2.0f, 1.0f);
+        g.drawEllipse(cx - inner, cy - inner, inner * 2.0f, inner * 2.0f, 1.0f * scale);
 
         // Pointer
         const float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
         g.setColour(Palette::accentBright);
         g.drawLine(cx + inner * 0.80f * std::sin(angle), cy - inner * 0.80f * std::cos(angle),
-                   cx + inner * 1.00f * std::sin(angle), cy - inner * 1.00f * std::cos(angle), 2.0f);
+                   cx + inner * 1.00f * std::sin(angle), cy - inner * 1.00f * std::cos(angle), 2.0f * scale);
 
-        // Value text
-        g.setColour(Palette::textValue);
-        g.setFont(juce::Font(juce::FontOptions(std::max(9.0f, radius * 0.30f))));
-
-        // A knob can ask to be shown on a different scale, e.g. 0..1 shown as 0..100
+        // Value text. A knob can ask to be shown on a different scale (e.g. 0..1 shown as 0..100)
         const double displayScale = static_cast<double>(slider.getProperties().getWithDefault("displayScale", 1.0));
 
         juce::String text;
@@ -159,6 +165,11 @@ public:
         else
             text = juce::String(slider.getValue(), 1);
 
+        if (static_cast<bool>(slider.getProperties().getWithDefault("hideValue", false)))
+            return;
+
+        g.setColour(Palette::textValue);
+        g.setFont(juce::Font(juce::FontOptions(std::max(9.0f, radius * 0.30f))));
         g.drawText(text,
                    static_cast<int>(cx - inner), static_cast<int>(cy - inner * 0.4f),
                    static_cast<int>(inner * 2.0f), static_cast<int>(inner * 0.8f),
@@ -172,7 +183,7 @@ public:
                            bool shouldDrawButtonAsHighlighted,
                            bool shouldDrawButtonAsDown) override
     {
-        auto bounds = button.getLocalBounds().toFloat().reduced(2.0f);
+        auto bounds = button.getLocalBounds().toFloat().reduced(2.0f * scale);
         const bool on = button.getToggleState();
         const float cr = bounds.getHeight() * 0.5f;
 
@@ -186,27 +197,27 @@ public:
         if (on)
         {
             g.setColour(Palette::accent.withAlpha(0.25f));
-            g.drawRoundedRectangle(bounds.expanded(1.5f), cr + 1.5f, 3.0f);
+            g.drawRoundedRectangle(bounds.expanded(1.5f * scale), cr + 1.5f * scale, 3.0f * scale);
         }
 
-        g.setColour(on ? Palette::accent : Palette::accentDim);
-        g.drawRoundedRectangle(bounds, cr, 1.2f);
+        g.setColour((on || shouldDrawButtonAsHighlighted) ? Palette::accent : Palette::accentDim);
+        g.drawRoundedRectangle(bounds, cr, 1.2f * scale);
 
         // LED
-        const float ledD = 8.0f;
-        auto led = juce::Rectangle<float>(bounds.getX() + 10.0f, bounds.getCentreY() - ledD * 0.5f, ledD, ledD);
+        const float ledD = 8.0f * scale;
+        auto led = juce::Rectangle<float>(bounds.getX() + 10.0f * scale, bounds.getCentreY() - ledD * 0.5f, ledD, ledD);
         if (on)
         {
             g.setColour(Palette::accent.withAlpha(0.35f));
-            g.fillEllipse(led.expanded(3.0f));
+            g.fillEllipse(led.expanded(3.0f * scale));
         }
         g.setColour(on ? Palette::accentBright : Palette::accentDeep);
         g.fillEllipse(led);
 
         // Text
         g.setColour(on ? Palette::textBright : Palette::textDim);
-        g.setFont(juce::Font(juce::FontOptions(12.5f)));
-        g.drawText(button.getButtonText(), bounds.withTrimmedLeft(24.0f).toNearestInt(),
+        g.setFont(juce::Font(juce::FontOptions(std::max(9.5f, 13.0f * scale))));
+        g.drawText(button.getButtonText(), bounds.withTrimmedLeft(24.0f * scale).toNearestInt(),
                    juce::Justification::centred, false);
 
         juce::ignoreUnused(shouldDrawButtonAsDown);
@@ -251,14 +262,14 @@ public:
 
             juce::ColourGradient grad(top, 0.0f, b.getY(), bottom, 0.0f, b.getBottom(), false);
             g.setGradientFill(grad);
-            g.fillRoundedRectangle(b, 4.0f);
+            g.fillRoundedRectangle(b, 4.0f * scale);
 
             g.setColour(on ? Palette::accent.withAlpha(0.8f) : Palette::accentDeep);
-            g.drawRoundedRectangle(b, 4.0f, 1.0f);
+            g.drawRoundedRectangle(b, 4.0f * scale, 1.0f);
             return;
         }
 
-        auto b = button.getLocalBounds().toFloat().reduced(1.5f);
+        auto b = button.getLocalBounds().toFloat().reduced(1.5f * scale);
         const float cr = b.getHeight() * 0.5f;
 
         auto fill = on ? Palette::accentDeep : Palette::bgSection;
@@ -273,11 +284,11 @@ public:
         if (on)
         {
             g.setColour(Palette::accent.withAlpha(0.25f));
-            g.drawRoundedRectangle(b.expanded(1.5f), cr + 1.5f, 3.0f);
+            g.drawRoundedRectangle(b.expanded(1.5f * scale), cr + 1.5f * scale, 3.0f * scale);
         }
 
-        g.setColour(on ? Palette::accent : Palette::accentDim);
-        g.drawRoundedRectangle(b, cr, 1.2f);
+        g.setColour((on || shouldDrawButtonAsHighlighted) ? Palette::accent : Palette::accentDim);
+        g.drawRoundedRectangle(b, cr, 1.2f * scale);
     }
 
     void drawButtonText (juce::Graphics& g, juce::TextButton& button,
@@ -290,8 +301,9 @@ public:
         {
             auto b = button.getLocalBounds();
             g.setColour(button.getToggleState() ? Palette::textBright : Palette::textDim);
-            g.setFont(juce::Font(juce::FontOptions(pk == 1 ? 15.0f : 12.0f)));
-            g.drawText(button.getButtonText(), b.removeFromTop(pk == 1 ? 34 : 26),
+            g.setFont(juce::Font(juce::FontOptions(std::max(9.0f, (pk == 1 ? 16.0f : 13.0f) * scale))));
+            g.drawText(button.getButtonText(),
+                       b.removeFromTop(juce::roundToInt((pk == 1 ? 34.0f : 26.0f) * scale)),
                        juce::Justification::centred, false);
             return;
         }
@@ -299,6 +311,47 @@ public:
         LookAndFeel_V4::drawButtonText(g, button, shouldDrawButtonAsHighlighted,
                                        shouldDrawButtonAsDown);
     }
+
+    // ------------------------------------------------------------------
+    // Drop-down box (the Key selector): themed pill with a small arrow
+    // ------------------------------------------------------------------
+    void drawComboBox (juce::Graphics& g, int width, int height, bool /*isButtonDown*/,
+                       int /*buttonX*/, int /*buttonY*/, int /*buttonW*/, int /*buttonH*/,
+                       juce::ComboBox& box) override
+    {
+        auto b = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height))
+                     .reduced(1.5f * scale);
+        const float cr = b.getHeight() * 0.5f;
+
+        g.setColour(Palette::bgSection);
+        g.fillRoundedRectangle(b, cr);
+        g.setColour(box.isMouseOver(true) ? Palette::accent : Palette::accentDim);
+        g.drawRoundedRectangle(b, cr, 1.2f * scale);
+
+        const float ax = b.getRight() - cr * 1.1f;
+        const float ay = b.getCentreY();
+        const float aw = 4.5f * scale;
+        juce::Path arrow;
+        arrow.addTriangle(ax - aw, ay - aw * 0.5f, ax + aw, ay - aw * 0.5f, ax, ay + aw * 0.6f);
+        g.setColour(Palette::accent);
+        g.fillPath(arrow);
+    }
+
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds(juce::roundToInt(static_cast<float>(box.getHeight()) * 0.45f), 1,
+                        box.getWidth() - juce::roundToInt(static_cast<float>(box.getHeight()) * 1.2f),
+                        box.getHeight() - 2);
+        label.setFont(getComboBoxFont(box));
+    }
+
+    juce::Font getPopupMenuFont() override
+    {
+        return juce::Font(juce::FontOptions(std::max(11.0f, 15.0f * scale)));
+    }
+
+private:
+    float scale = 1.0f;
 };
 
 } // namespace humtune
