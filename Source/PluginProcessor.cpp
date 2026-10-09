@@ -80,13 +80,15 @@ HumHouseVocalTuneProcessor::createParameterLayout()
         juce::ParameterID{"outputGain", 1}, "Output Gain",
         juce::NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f));
 
-    // Per-note on/off for custom scale
+    // Piano keys: which notes the tuner may snap to. They start as C major, which matches
+    // the default Scale (Major) and Key (C). The Scale and Key controls re-light them.
     for (int i = 0; i < 12; ++i)
     {
         auto id = "note" + juce::String(i);
         auto name = kNoteNames[i] + " On";
+        const bool inCMajor = isNoteInScale(0, 0, i);
         params.push_back(std::make_unique<juce::AudioParameterBool>(
-            juce::ParameterID{id, 1}, name, true));
+            juce::ParameterID{id, 1}, name, inCMajor));
     }
 
     return { params.begin(), params.end() };
@@ -136,16 +138,15 @@ void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     float inGainDb  = *apvts.getRawParameterValue("inputGain");
     float outGainDb = *apvts.getRawParameterValue("outputGain");
 
-    // Custom scale from per-note toggles
-    std::array<bool, 12> customScale;
+    // The piano keys are the scale
+    std::array<bool, 12> keyMask;
+    bool anyKeyOn = false;
     for (int i = 0; i < 12; ++i)
-        customScale[static_cast<size_t>(i)] =
+    {
+        keyMask[static_cast<size_t>(i)] =
             *apvts.getRawParameterValue("note" + juce::String(i)) > 0.5f;
-
-    // Check if any note is turned off (custom mode)
-    bool anyOff = false;
-    for (auto b : customScale)
-        if (!b) { anyOff = true; break; }
+        anyKeyOn = anyKeyOn || keyMask[static_cast<size_t>(i)];
+    }
 
     engine.setRootNote(root);
     engine.setScaleType(scale);
@@ -165,8 +166,9 @@ void HumHouseVocalTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         triggerAsyncUpdate();
     }
 
-    if (anyOff)
-        engine.setCustomScale(customScale);
+    // With every key switched off there is nothing to snap to: fall back to Scale + Key
+    if (anyKeyOn)
+        engine.setCustomScale(keyMask);
     else
         engine.clearCustomScale();
 
@@ -243,9 +245,17 @@ void HumHouseVocalTuneProcessor::setCurrentProgram (int index)
     set("speed",           p.speed);
     set("humanize",        p.humanize);
     set("scaleType",       static_cast<float>(p.scaleType));
+    applyScaleToKeys(p.scaleType, static_cast<int>(*apvts.getRawParameterValue("rootNote")));
     set("noteStabilizer",  p.stabilizer ? 1.0f : 0.0f);
     set("formantPreserve", p.formantPreserve ? 1.0f : 0.0f);
     set("lowLatency",      p.lowLatency ? 1.0f : 0.0f);
+}
+
+void HumHouseVocalTuneProcessor::applyScaleToKeys (int scaleType, int root)
+{
+    for (int i = 0; i < 12; ++i)
+        if (auto* param = apvts.getParameter("note" + juce::String(i)))
+            param->setValueNotifyingHost(isNoteInScale(scaleType, root, i) ? 1.0f : 0.0f);
 }
 
 const juce::String HumHouseVocalTuneProcessor::getProgramName (int index)
