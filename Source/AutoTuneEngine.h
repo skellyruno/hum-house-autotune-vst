@@ -18,10 +18,12 @@ public:
     static constexpr std::array<bool, 12> kChromatic = {true,true,true,true,true,true,true,true,true,true,true,true};
 
     static constexpr int kMaxChannels = 2;
-    // Low Latency mode only tracks pitches above this. The delay of the shifter is about
-    // 2.5 periods of the LOWEST pitch it must handle, so a higher floor = less delay:
-    //   80 Hz (normal) -> ~31 ms,   200 Hz (low latency) -> ~13 ms   (at 48 kHz)
-    static constexpr float kLowLatencyMinHz = 200.0f;     // about G3
+    // The delay of the shifter is about 2.5 periods of the LOWEST pitch it must handle,
+    // so a higher floor means less delay (numbers for 48 kHz):
+    //    80 Hz -> 31.4 ms     100 Hz -> 25.2 ms  (normal)     220 Hz -> 11.5 ms  (low latency)
+    // Notes below the floor are not tuned; they pass through untouched.
+    static constexpr float kNormalMinHz     = 100.0f;     // about G2
+    static constexpr float kLowLatencyMinHz = 220.0f;     // about A3
 
     void prepare (double sampleRate, int blockSize)
     {
@@ -246,7 +248,7 @@ private:
 
     void applyLatencyMode()
     {
-        const float minHz = lowLatency ? kLowLatencyMinHz : PitchDetector::kMinHz;
+        const float minHz = lowLatency ? kLowLatencyMinHz : kNormalMinHz;
 
         detector.setMinFrequency(minHz);
         for (auto& s : shifters)
